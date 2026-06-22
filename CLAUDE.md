@@ -1,149 +1,104 @@
-# CLAUDE.md — building on spine
+# CLAUDE.md — building Kaizen on spine
 
-This repo is a **clone of spine**: a minimal Python agent foundation — a language
-model, four tools, and a loop. It is a starting point, not a product, and not
-something to preserve. Working here, your job is to help grow this clone into a
-**new agent** — the one the developer actually wants — building on the skeleton
-rather than guarding it.
+This repo is a **spine clone** being grown into **Kaizen**: a self-evolving agent
+that works on its own code, terminates its own process, and is reborn by an
+external supervisor across generations, inheriting memory and plans each time. The
+full design is in [`SPEC.md`](SPEC.md). Read it before writing anything.
 
-The full rationale lives in [`doc/spine-spec.md`](doc/spine-spec.md); a code-level
-walkthrough is in [`doc/ARCHITECTURE.md`](doc/ARCHITECTURE.md). This file is the
-short, always-on orientation.
+You are the **coding agent that builds Kaizen**. You are *not* benki itself. Your
+job is to construct the substrate and wire the agent into it, following the spec
+and — above everything — never violating the invariants below.
 
-## Bootstrap protocol — do this first
+## Read first, in this order
 
-On a fresh clone, before changing anything:
+1. **`SPEC.md`** — the architecture, the layers, the termination protocol, the
+   invariants, the build order. This is the source of truth.
+2. **The spine skeleton** — `src/spine/agent.py` (the loop), `src/spine/tools/`
+   (the four tools + the `Tool` protocol in `base.py`), `src/spine/hooks.py` (the
+   permissive policy seam you will tighten), `src/spine/prompts/system.md`. It's
+   small; hold all of it in your head before extending it.
+3. **`doc/spine-spec.md` and `doc/ARCHITECTURE.md`** — the foundation's rationale
+   and the copy-pasteable recipes for adding a tool / hook / skill.
 
-1. **Read the skeleton.** Understand what you're standing on — the loop
-   (`src/spine/agent.py`), the four tools (`src/spine/tools/`), and the seams
-   where capability attaches (hooks, skills, the system prompt). It's small on
-   purpose; you can hold all of it in your head in one sitting.
-2. **Ask the developer what they're building.** What agent is this becoming? What
-   does it need to do, what tools / skills / knowledge does its domain require,
-   what should it refuse? Don't assume — interview.
-3. **Discuss the shape.** Talk it through before writing code: which capability is
-   a tool, which is a skill, which is a prompt change, what policy the hook should
-   enforce. Map it onto the seams below.
-4. **Then grow the body.** Once you both know the shape, build it at the seams.
-   The loop and the four tools usually stay as they are; the new agent is mostly
-   new tools, new skills, a new prompt, and a tightened hook.
+Then confirm your understanding with the developer before building. Do not start
+coding until the shape is agreed.
 
-Don't spend effort preserving the name "spine" or defending the original
-minimalism for its own sake. Preserve what's *useful* about the foundation — read
-it, understand why it's shaped this way — then build forward.
+## The invariants — never violate these
 
-## The grain — how the foundation is built, and why
+These are not style preferences. They are the properties that let Kaizen exist
+without bricking itself or its host. If a request seems to require breaking one,
+stop and say so.
 
-Spine is deliberately minimal, and the minimalism is load-bearing. These are the
-defaults to build *with*; each comes with its reason, so you know when it applies.
+1. **Sandbox.** Kaizen is meant to run inside a container/VM. Don't write code that
+   assumes — or requires — running on the host directly. Document the isolation
+   setup; don't quietly depend on host state.
+2. **The watchdog and runner live OUTSIDE `agent/`.** They are the immortal layer.
+   The agent's writable tree is `agent/` and nothing else. Never place supervisor
+   or lifecycle logic where the agent can edit it.
+3. **No death is final without a boot-check, and `last_good` always exists.** The
+   runner verifies the next body imports and survives a smoke run before any
+   termination commits. The agent's own tests are advisory only.
+4. **State persists continuously.** Memory/todo/roadmap are flushed incrementally
+   and at `session_end`, never only inside the graceful-termination path. Assume
+   every generation can die dirty at any moment.
+5. **The agent cannot reach its own brakes.** The `before_tool_call` hook, the
+   runner, and the watchdog are off-limits to the agent. The guardrail hook must
+   block `bash` from: writing outside `agent/`, editing crontab/systemd, sending
+   signals (`kill`), and touching `substrate/`.
+6. **Scheduling and PID authority live in the substrate.** The agent leaves a
+   `wake` note for the watchdog; it never edits a scheduler and never learns its
+   own PID.
 
-- **Four tools.** The model gets `read`, `write`, `edit`, and `bash`. `bash` is
-  the escape hatch — grep, git, curl, tests, package installs all go through it,
-  which is why four primitives cover so much. Reach for a fifth built-in only when
-  a real need genuinely can't be served by the four; usually a *skill* (a CLI +
-  README the agent runs via `bash`) is the lighter way to add capability.
-- **Own the loop.** The agent loop (`src/spine/agent.py`, ~150 lines) is
-  hand-written so you can read and trust every line. Keeping it framework-free (no
-  LangChain / LangGraph in the core) is what keeps it that readable and lock-in-free.
-- **Rent the provider.** All LLM calls go through `provider.py`'s `complete()`,
-  which rents `litellm` for multi-provider normalization. Keeping provider SDKs
-  out of the rest of the core means swapping or upgrading a provider touches one
-  file.
-- **Seams over features.** Capability attaches at clean interfaces — tools, hooks,
-  skills, the prompt — rather than being baked into the core. A good seam costs
-  almost nothing now and lets heavy machinery dock later without a rewrite.
-- **Validate, don't crash.** Tool args are Pydantic-validated before `execute()`,
-  and a validation failure is *returned to the model as the tool result*, not
-  raised — so the agent self-corrects instead of dying.
+When in doubt, push the risky capability *outward* into the dumb substrate, never
+*inward* into the smart agent.
 
-Building along this grain keeps the agent readable, debuggable, and free of
-framework lock-in. That's the recommendation. It isn't a cage — see below.
+## Build order — one milestone at a time, stop for review between
 
-## Going against the grain — allowed, just know the cost
+Follow `SPEC.md`'s build order. The sequencing is load-bearing: **build and prove
+the substrate with a no-op agent before any real LLM edits code.** Debug the
+machine and the agent's mistakes separately, never together.
 
-This foundation is built for simplicity, minimalism, and being ready to extend.
-Going heavy cuts against that grain. You can still do it — it's the developer's
-call — but be honest about the trade:
+- **M0** — substrate + stub agent. Watchdog, runner, state files, config, guardrail
+  hook, `terminate` tool. Acceptance tests in `SPEC.md` must pass: respawn across
+  generations, clean termination protocol, boot-check catches a broken body and
+  rolls back to `last_good`, a `kill -9` is noticed and respawned, caps halt the
+  loop. **Stop here for review.**
+- **M1** — wire in the real spine agent + the evolving system prompt + memory
+  checkpointing + per-generation git commits.
+- **M2** — observability + budget/generation/interval enforcement.
+- **M3** — capabilities (browser tool, per-todo verification) — only on request.
 
-- Adding a fifth core tool, putting provider SDKs in the core, or growing the loop
-  past what one person can hold in their head all erode the very property that
-  makes this foundation worth using. Not forbidden; just not recommended, and
-  worth a deliberate decision rather than a quiet drift.
-- If the agent genuinely needs a heavy framework — LangChain, LangGraph, a full
-  orchestration runtime — say so plainly, to the coding agent and the developer
-  both: you are probably **better off starting fresh** with that framework than
-  retrofitting it onto this foundation, which isn't designed to mesh with it.
-  Bolting it on tends to give you the costs of both and the benefits of neither.
+Do not skip ahead. A broken M0 makes everything above it un-debuggable.
 
-Compass, not cage: state the recommendation and the reason, then let the developer
-decide.
+## Keep spine's grain
 
-## The map — where things live, what attaches where
+spine is deliberately minimal and the minimalism is load-bearing. Build *with* it:
 
-```
-src/spine/
-  agent.py        # the loop, conversation state, tool dispatch, hooks — you own this
-  provider.py     # rented litellm wrapper: complete(model, messages, tools)
-  tools/          # read · write · edit · bash  (the four built-ins; Tool protocol in base.py)
-  hooks.py        # before/after_tool_call + session lifecycle — ships PERMISSIVE
-  skills.py       # skill discovery/loading seam
-  prompts/system.md   # the base system prompt
-main.py           # runnable entry point — the repo is the agent, so its entry lives at the root
-skills/           # capability-as-documentation; `lines/` is a worked example
-tests/
-```
+- **The four tools stay four.** `read`/`write`/`edit`/`bash`; `bash` is the escape
+  hatch. Kaizen adds exactly one agent-facing tool — `terminate` — because it's a
+  genuine new primitive (process lifecycle), not something `bash` should do given
+  invariant #5. Resist adding more core tools; prefer skills or substrate logic.
+- **Own the loop.** Don't touch `agent.py`'s loop or add a framework to the core.
+  Everything Kaizen needs attaches at the seams (tool, hook, prompt) or lives in the
+  substrate above the loop.
+- **Rent the provider.** LLM calls stay behind `provider.complete()`.
+- **Validate, don't crash** in tools; surface failures as `ToolResult`s.
+- The substrate (`watchdog.py`, `runner.py`, `substrate/`) is *new* code outside
+  the spine core — there you write plain, boring, obvious Python. Dumb and
+  readable beats clever; this is the layer whose job is to be trustworthy.
 
-The seams a new agent attaches to:
+## Style & commands
 
-- **Add a tool** — implement the `Tool` protocol (`tools/base.py`: `name`,
-  `description`, Pydantic `parameters`, `execute() -> ToolResult`) and pass it to
-  `Agent(tools=[...])`.
-- **Add a skill** — drop a CLI + `README.md` under `skills/`; the agent discovers
-  it and runs it via `bash`. No plugin protocol — that's the point.
-- **Set policy** — tighten the `before_tool_call` hook (`hooks.py`). It ships
-  permissive; this is the *only* place policy belongs (allowlists, confirmations,
-  an `rm -rf` guard, audit logging). The core has no permission system on
-  purpose — isolation is external (sandbox / container).
-- **Change behavior or voice** — edit `prompts/system.md`, or pass `system_prompt=`.
+- Python 3.12+. Type hints everywhere. Pydantic for schemas. Small, obvious
+  functions; clarity over cleverness.
+- Install: `pip install -e ".[dev]"`  (or `uv sync --extra dev`)
+- Test: `pytest` — no API key needed; the loop test drives a stubbed provider.
+- Lint/format: `ruff check` / `ruff format`
+- The agent's *default* model is `deepseek/deepseek-chat` (very cheap ~$0.28/$0.42
+  per Mtok, capable, runs on `DEEPSEEK_API_KEY` alone, priced from litellm's cost
+  map). The body can override it per generation by writing `agent/MODEL`; metering is
+  provider-agnostic and prices whatever ran. The provider layer normalizes the id.
 
-`doc/ARCHITECTURE.md` has copy-pasteable recipes for each of these.
-
-## Sub-agents (orchestration) — ships single-agent, opens cleanly
-
-This foundation ships **single-agent**: one loop, one model, four tools. That's
-the right default, and most agents never need more.
-
-If the agent you're building genuinely needs **sub-agents** — a parent that hands
-work to specialized children — the foundation is built to allow it without a
-rewrite, because the `Tool` protocol is kept agent-satisfiable: an `Agent` can be
-wrapped as a `Tool` whose `execute(args)` runs the child's loop on `args["task"]`
-and returns its final message. The wrapper is ~20 lines.
-
-Before you add it, decide a few things up front:
-
-- **Which children, and why** — what specialized agents actually earn their keep.
-- **Nesting depth** — how deep parent → child → grandchild is allowed to go.
-- **Token / cost budget** — each nested agent call burns a whole conversation;
-  watch cost and latency.
-- **Who terminates** — how a child signals "done," and how the parent decides the
-  overall task is complete.
-
-Add only what a real workflow needs — start with `agent_as_tool`, and add parallel
-fan-out / shared state / handoff later if and when they're actually required, not
-speculatively.
-
-## Style
-
-- Python 3.12+. Type hints everywhere. Pydantic for schemas.
-- This is a codebase meant to be **read**. Keep functions small and obvious;
-  prefer clarity over cleverness. No premature abstraction.
-
-## Build & run
-
-- Install (incl. dev tools): `pip install -e ".[dev]"`  (or `uv sync --extra dev`)
-- Run the agent: `python main.py "<task>"` — needs a provider key in the env (e.g.
-  `ANTHROPIC_API_KEY`); pick a model with `--model`. The default model is
-  `anthropic/claude-opus-4-8`.
-- Test: `pytest` — no API key needed; the loop test drives a stubbed provider, and
-  `provider.py` imports `litellm` lazily so the suite runs offline.
-- Lint / format: `ruff check` / `ruff format`
+If at any point a step seems to require breaking an invariant, or the developer
+asks for something that does, **stop and flag it** rather than quietly working
+around it. The invariants are the project.

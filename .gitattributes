@@ -1,0 +1,4 @@
+# This project targets Linux containers. Keep LF in the working tree everywhere so
+# shell scripts (entrypoint.sh) and the Docker build work regardless of the cloner's
+# platform — a CRLF `#!/bin/sh` is a "bad interpreter" error in the container.
+* text=auto eol=lf

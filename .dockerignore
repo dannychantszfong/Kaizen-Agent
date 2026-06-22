@@ -1,0 +1,38 @@
+# Build context = repo root. Keep the image clean and let the Dockerfile create a
+# fresh git history (so the build host's .git never leaks into the lineage).
+.git
+.gitignore
+
+# Python / tooling caches
+**/__pycache__
+**/*.py[cod]
+*.egg-info
+.eggs
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Virtual environments
+.venv
+venv
+
+# Substrate runtime state - the image bakes empty, agent-owned state/journal dirs
+# itself; never bake a host machine's lineage state into the image.
+substrate/state
+substrate/journal
+kaizen-bootcheck-*
+
+# The body's carry-over files are gitignored runtime artifacts, seeded from
+# durable state at birth - never bake a host copy.
+agent/MEMORY.md
+agent/ROADMAP.md
+agent/TODO.json
+
+# Secrets — never bake provider API keys into the image.
+.env
+*.env
+
+# Local editor / assistant settings
+.claude
+.DS_Store
+Thumbs.db

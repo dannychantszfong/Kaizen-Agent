@@ -21,6 +21,25 @@ uv.lock
 # Claude Code local settings (machine-specific)
 .claude/settings.local.json
 
+# Secrets — provider API keys live here, NEVER commit them.
+.env
+*.env
+!.env.example
+
+# Kaizen substrate runtime state (continuously persisted; not source of truth in git)
+substrate/state/
+substrate/journal/
+
+# The body's carry-over files: written by the agent in agent/, mirrored to the
+# canonical copy under substrate/state/. Per-generation commits carry CODE only;
+# memory lives in state (on the volume), so these working copies stay untracked.
+agent/MEMORY.md
+agent/ROADMAP.md
+agent/TODO.json
+
+# boot-check temp worktrees (created and torn down per termination)
+kaizen-bootcheck-*/
+
 # OS cruft
 .DS_Store
 Thumbs.db

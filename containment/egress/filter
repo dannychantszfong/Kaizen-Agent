@@ -1,0 +1,25 @@
+# Egress allowlist (POSIX extended regex, matched against the destination host).
+# FilterDefaultDeny=Yes in tinyproxy.conf means ONLY hosts matching a line here are
+# reachable; every other destination is denied. Each entry is anchored to ONE exact
+# FQDN (^...$) so this stays a NAMED-DOMAIN allowlist, never an allow-all.
+#
+# Hostnames are the exact endpoints the matching litellm provider route connects to
+# (API-key auth — none of these use a separate OAuth/token host). To enable another
+# provider, add one anchored line; keep the list as short as the run needs.
+#
+# provider     litellm route   key env var
+# ----------   -------------   -----------------
+# Anthropic    anthropic/      ANTHROPIC_API_KEY
+^api\.anthropic\.com$
+# OpenAI       openai/         OPENAI_API_KEY
+^api\.openai\.com$
+# Google Gemini gemini/        GEMINI_API_KEY        (AI Studio REST; NOT Vertex)
+^generativelanguage\.googleapis\.com$
+# DeepSeek     deepseek/       DEEPSEEK_API_KEY
+^api\.deepseek\.com$
+# OpenRouter   openrouter/     OPENROUTER_API_KEY
+^openrouter\.ai$
+#
+# NOTE: Vertex AI / Bedrock are intentionally NOT enabled — they need OAuth/SigV4
+# token endpoints (e.g. oauth2.googleapis.com, sts.*.amazonaws.com) and provider
+# SDKs baked in. Add those hosts here AND the SDK in the Dockerfile if you enable them.

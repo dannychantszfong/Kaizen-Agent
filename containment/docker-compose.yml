@@ -1,0 +1,93 @@
+# Kaizen containment - the agent box + its only door to the network.
+#
+# Topology:
+#   kaizen        -> attached to `internal` only. `internal: true` means this
+#                    network has NO route to the internet. The container's sole
+#                    reachable peer is the egress proxy.
+#   egress-proxy  -> bridges `internal` and `external`. It forwards HTTPS CONNECT
+#                    to a hard allowlist (the provider host) and denies the rest.
+#
+# Run (after you have filled the PRIME DIRECTIVE in
+# agent/src/spine/prompts/system.md and exported ANTHROPIC_API_KEY):
+#   docker compose -f containment/docker-compose.yml up --build
+#
+# The lineage's durable state lives in the named volume `lineage`, so the agent
+# survives `docker rm` / `docker compose down` and resumes on the next `up`.
+
+services:
+  egress-proxy:
+    build:
+      context: ./egress
+    networks:
+      - internal
+      - external
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+
+  kaizen:
+    build:
+      # Build context is the repo root so the whole tree is baked into the image.
+      context: ..
+      dockerfile: containment/Dockerfile
+    depends_on:
+      - egress-proxy
+    networks:
+      # internal ONLY - no direct internet. Egress goes through the proxy.
+      - internal
+    volumes:
+      # The lineage's durable home: agent/ body, state/, journal/, and .git all
+      # live here and survive container removal. Initialized from the image on
+      # first run, persisted thereafter.
+      - lineage:/lineage
+    environment:
+      # All egress is funnelled through the allowlisting proxy.
+      HTTP_PROXY: http://egress-proxy:8888
+      HTTPS_PROXY: http://egress-proxy:8888
+      NO_PROXY: localhost,127.0.0.1
+      # The root watchdog drops to the unprivileged `agent` uid per generation.
+      KAIZEN_RUNNER_PREFIX: gosu agent
+      # Keep all home/cache writes on the tmpfs so a read-only rootfs is enough.
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp
+      XDG_CONFIG_HOME: /tmp
+      # Provider API keys — the only secrets in the box. Each falls back to empty,
+      # so setting only some leaves the rest simply unavailable (no crash; a call to
+      # an unkeyed provider just fails that generation). They must match the egress
+      # allowlist in containment/egress/filter. No VCS credentials are present:
+      # per-generation commits are LOCAL ONLY; you push the volume's repo yourself.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    # Read-only root filesystem; the only writable surfaces are the lineage volume
+    # and an explicit tmpfs for scratch (boot-check worktrees, caches).
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Drop every capability, then add back only what the root->agent privilege
+    # drop needs: gosu calls setgid/setgroups/setuid.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      # A dropped-privilege child can never regain privilege via setuid bits.
+      - no-new-privileges:true
+    # No --privileged, no docker socket mounted: the box cannot reach the host
+    # daemon or escalate to the host.
+    restart: unless-stopped
+
+networks:
+  internal:
+    internal: true
+  external:
+    driver: bridge
+
+volumes:
+  lineage:
