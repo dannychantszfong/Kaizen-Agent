@@ -74,13 +74,19 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    # Drop every capability, then add back only what the root->agent privilege
-    # drop needs: gosu calls setgid/setgroups/setuid.
+    # Drop every capability, then add back only what the TRUSTED root supervisor
+    # needs: SETUID/SETGID for the gosu root->agent drop, and DAC_OVERRIDE so the
+    # root watchdog can write the agent-owned lineage state (with caps dropped, root
+    # is no longer exempt from file-permission checks). These help ONLY root: the
+    # agent runs via `gosu agent` as a non-root uid with its capabilities cleared and
+    # no-new-privileges set, so it gains none of them and the immortal-code boundary
+    # (root:root, read-only to the agent) is unchanged.
     cap_drop:
       - ALL
     cap_add:
       - SETUID
       - SETGID
+      - DAC_OVERRIDE
     security_opt:
       # A dropped-privilege child can never regain privilege via setuid bits.
       - no-new-privileges:true
