@@ -23,6 +23,11 @@ services:
       - external
     cap_drop:
       - ALL
+    cap_add:
+      # tinyproxy starts as root and drops to the `nobody` user; that de-escalation
+      # needs setgid/setuid. Nothing else is granted.
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
     read_only: true
