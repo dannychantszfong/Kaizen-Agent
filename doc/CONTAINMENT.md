@@ -104,9 +104,13 @@ From [`containment/docker-compose.yml`](../containment/docker-compose.yml):
 - `read_only: true` root filesystem; the only writable surfaces are the `lineage`
   volume and a `tmpfs` at `/tmp` (boot-check worktrees, caches; `HOME`/`XDG_*` point
   there so a read-only `/` is enough).
-- `cap_drop: [ALL]`, then `cap_add: [SETUID, SETGID]` — the *only* capabilities
-  added back, and only because `gosu`'s root→agent drop calls `setgid`/`setgroups`/
-  `setuid`. Nothing else is granted.
+- `cap_drop: [ALL]`, then `cap_add: [SETUID, SETGID, DAC_OVERRIDE]` — the *only*
+  capabilities added back, and all for the **trusted root supervisor**: SETUID/SETGID
+  for `gosu`'s root→agent drop, and DAC_OVERRIDE so the root watchdog can write the
+  agent-owned lineage state (with caps dropped, root is no longer exempt from
+  file-permission checks). The agent gains none of these — after the `gosu` drop it is
+  a non-root uid with its capabilities cleared and `no-new-privileges` set, so the
+  immortal-code boundary holds.
 - `security_opt: [no-new-privileges:true]` — a dropped-privilege child can never
   regain privilege via a setuid bit.
 - **No `--privileged`. No docker socket mounted.** The box cannot reach the host
