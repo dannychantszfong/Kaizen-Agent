@@ -36,6 +36,8 @@ from pathlib import Path
 from spine.hooks import BeforeToolCall, Hooks
 from spine.tools.base import Tool, ToolResult
 
+from substrate.metering import clip, redact
+
 # Tools that can change a carry-over file and so warrant a re-mirror to state.
 _MUTATING_TOOLS = frozenset({"write", "edit", "bash"})
 
@@ -206,6 +208,14 @@ class SubstrateHooks(Hooks):
         """
         self.tool_calls += 1
         self.store.touch_heartbeat()
+        if getattr(self.config, "log_transcript", False):
+            try:
+                flag = "ERR" if result.is_error else "ok"
+                self._log(
+                    f"  · {tool.name} -> {flag}: {redact(clip(result.output, 500))}"
+                )
+            except Exception:  # noqa: BLE001 - observability never breaks a tool call
+                pass
         if tool.name in _MUTATING_TOOLS:
             mirrored = self.store.mirror_agent_to_state()
             if mirrored:

@@ -143,6 +143,7 @@ class Runner:
                 prior_spent_usd=status.budget_spent_usd,
                 log=self.log,
                 on_progress=self.store.touch_heartbeat,
+                transcript=self.config.log_transcript,
             )
         hooks = SubstrateHooks(self.config, self.store, log=self.log)
         ctx = body_mod.BodyContext(

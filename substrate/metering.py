@@ -27,8 +27,32 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+# Mask anything shaped like a provider API key (sk-..., sk-ant-..., sk-or-...) so a
+# stray `echo $DEEPSEEK_API_KEY` in a tool result can't leak into the logs.
+_SECRET_RE = re.compile(r"sk-[A-Za-z0-9_\-]{12,}")
+
+
+def redact(text: str) -> str:
+    return _SECRET_RE.sub("sk-***REDACTED***", text)
+
+
+def clip(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())  # collapse whitespace/newlines for a 1-line log
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"…(+{len(text) - limit} chars)"
+
+
+def args_summary(args: dict | None, *, per_value: int = 140, total: int = 400) -> str:
+    parts = []
+    for k, v in (args or {}).items():
+        sv = v if isinstance(v, str) else json.dumps(v)
+        parts.append(f"{k}={clip(sv, per_value)!r}")
+    return clip(", ".join(parts), total)
 
 
 class UnpriceableModelError(RuntimeError):
@@ -163,6 +187,7 @@ def make_metered_complete(
     prior_spent_usd: float = 0.0,
     log: Callable[[str], None] | None = None,
     on_progress: Callable[[], None] | None = None,
+    transcript: bool = False,
     raw_complete: Callable[..., Any] | None = None,
     cost_fn: Callable[[Any], float] | None = None,
 ):
@@ -241,6 +266,16 @@ def make_metered_complete(
                 on_progress()
             except Exception:  # noqa: BLE001 - liveness stamp is never load-bearing
                 pass
-        return _normalize(response)
+
+        out = _normalize(response)
+        if log and transcript:  # the agent's "said" + what it's about to "do"
+            try:
+                if out.content and out.content.strip():
+                    log(f"  · says: {redact(clip(out.content, 1000))}")
+                for tc in out.tool_calls:
+                    log(f"  · calls {tc.name}({redact(args_summary(tc.arguments))})")
+            except Exception:  # noqa: BLE001 - observability is never load-bearing
+                pass
+        return out
 
     return complete

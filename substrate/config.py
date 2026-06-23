@@ -28,6 +28,7 @@ _OVERRIDABLE = (
     "supervise_poll_seconds",
     "liveness_poll_seconds",
     "idle_nudge_limit",
+    "log_transcript",
     "stub_cost_per_generation_usd",
 )
 
@@ -79,6 +80,10 @@ class Config:
     # nudges (the agent stops without terminating and does nothing when asked to
     # continue), end the generation gracefully and respawn a fresh one.
     idle_nudge_limit: int = 3
+    # observability: log the agent's transcript — its assistant text, each tool call
+    # (name + truncated args), and each result — through the journal/stdout, with
+    # API-key redaction. Off makes the logs just metering + lifecycle events.
+    log_transcript: bool = True
 
     # -- M0 only: a stubbed per-generation cost so the budget cap is exercisable
     # without a real LLM. M2 replaces this with measured spend.
