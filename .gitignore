@@ -40,6 +40,9 @@ agent/TODO.json
 # boot-check temp worktrees (created and torn down per termination)
 kaizen-bootcheck-*/
 
+# harvested lineages (host-side output of tools/harvest.py) — local, can be large
+runs/
+
 # OS cruft
 .DS_Store
 Thumbs.db
