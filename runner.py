@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from enum import IntEnum
 from pathlib import Path
@@ -78,27 +79,47 @@ class Runner:
         log=None,  # noqa: ANN001
     ) -> None:
         self.config = config
+        self._extra_log = log
+        self._journal_fh = None  # opened per generation; written live (line by line)
+        self._log_lock = threading.Lock()  # log() runs from the monitor thread too
         self.store = StateStore(config, log=self.log)
         self.body_runner = body_runner or body_mod.select_body_runner()
         # None => the runner builds the real metered complete itself (with cap +
         # prior spend + logger for the live per-call line). Tests inject a factory.
         self._provider_factory = provider_factory
-        self._extra_log = log
-        self._lines: list[str] = []
 
     # -- logging / journal --------------------------------------------------
     def log(self, msg: str) -> None:
         line = f"[{time.strftime('%H:%M:%S')}] {msg}"
-        self._lines.append(line)
         if self._extra_log:
             self._extra_log(line)
+        # Append to the durable journal LIVE (flushed per line), so the full record
+        # is readable mid-generation and survives a hard kill.
+        with self._log_lock:
+            if self._journal_fh is not None:
+                try:
+                    self._journal_fh.write(line + "\n")
+                    self._journal_fh.flush()
+                except OSError:
+                    pass
 
-    def _flush_journal(self, generation: int) -> None:
-        path = self.config.journal_path(generation)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write("\n".join(self._lines) + "\n")
-        self._lines.clear()
+    def _open_journal(self, generation: int) -> None:
+        try:
+            path = self.config.journal_path(generation)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._journal_fh = path.open("a", encoding="utf-8")
+        except OSError:
+            self._journal_fh = None
+
+    def _close_journal(self) -> None:
+        with self._log_lock:
+            if self._journal_fh is not None:
+                try:
+                    self._journal_fh.flush()
+                    self._journal_fh.close()
+                except OSError:
+                    pass
+                self._journal_fh = None
 
     # -- entry point --------------------------------------------------------
     def run_one_generation(self) -> int:
@@ -108,12 +129,13 @@ class Runner:
         # Children present BEFORE the body runs are not ours to reap (in-process
         # tests share a pid with their test runner); only kill children the
         # generation itself spawned, so nothing leaks across lives.
+        self._open_journal(gen)
         baseline = liveness.snapshot_children(os.getpid())
         try:
             return self._run(status, gen)
         finally:
             liveness.reap_new_children(os.getpid(), baseline, log=self.log)
-            self._flush_journal(gen)
+            self._close_journal()
 
     def _run(self, status: Status, gen: int) -> int:
         self.log(f"=== generation {gen} birth ===")
@@ -144,6 +166,7 @@ class Runner:
                 log=self.log,
                 on_progress=self.store.touch_heartbeat,
                 transcript=self.config.log_transcript,
+                transcript_chars=self.config.transcript_max_chars,
             )
         hooks = SubstrateHooks(self.config, self.store, log=self.log)
         ctx = body_mod.BodyContext(
@@ -341,7 +364,26 @@ class Runner:
         _git(self.config, "add", "--", "agent")
         msg = f"gen {gen}: {reason}".strip()
         _git(self.config, "commit", "--allow-empty", "-m", msg)
-        return _git(self.config, "rev-parse", "HEAD").stdout.strip()
+        sha = _git(self.config, "rev-parse", "HEAD").stdout.strip()
+        # Log exactly which body files this generation changed (the concrete output).
+        try:
+            stat = _git(
+                self.config,
+                "show",
+                "--stat",
+                "--format=",
+                "--no-color",
+                sha,
+                check=False,
+            ).stdout.strip()
+            self.log(
+                "changed this generation:\n" + stat
+                if stat
+                else "changed this generation: (no tracked code changes)"
+            )
+        except Exception:  # noqa: BLE001 - observability, never load-bearing
+            pass
+        return sha
 
     def _boot_check(self, sha: str) -> tuple[bool, str]:
         cfg = self.config

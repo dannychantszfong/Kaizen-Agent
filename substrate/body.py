@@ -183,6 +183,9 @@ def run_real_body(ctx: BodyContext) -> None:
     while True:
         turn += 1
         tools_before = getattr(ctx.hooks, "tool_calls", 0)
+        if getattr(ctx.config, "log_transcript", False):
+            kind = "birth" if turn == 1 else "nudge"
+            ctx.log(f"  · prompt[turn {turn} · {kind}]: {message}")
         final = agent.run(message)
 
         if ctx.sink.requested:

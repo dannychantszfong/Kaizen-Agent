@@ -55,6 +55,30 @@ def args_summary(args: dict | None, *, per_value: int = 140, total: int = 400) -
     return clip(", ".join(parts), total)
 
 
+def clip_lines(text: str, limit: int) -> str:
+    """Truncate by length but PRESERVE newlines (for full, readable multi-line
+    transcript entries). limit <= 0 means no truncation — log everything."""
+    text = str(text)
+    if limit and len(text) > limit:
+        return text[:limit] + f"… (+{len(text) - limit} more chars)"
+    return text
+
+
+def format_call(name: str, args: dict | None, limit: int) -> str:
+    """A readable, full record of one tool call: name, then each arg (long/multi-line
+    values shown indented in full, e.g. the whole file a `write` produced)."""
+    out = [f"  · calls {name}"]
+    for k, v in (args or {}).items():
+        sv = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+        sv = clip_lines(redact(sv), limit)
+        if "\n" in sv:
+            block = "\n".join("        " + ln for ln in sv.splitlines())
+            out.append(f"      {k}=\n{block}")
+        else:
+            out.append(f"      {k}={sv}")
+    return "\n".join(out)
+
+
 class UnpriceableModelError(RuntimeError):
     """Raised when a model that actually ran cannot be priced. Stops the generation
     immediately so the runner can halt the lineage rather than bill blind $0."""
@@ -285,6 +309,7 @@ def make_metered_complete(
     log: Callable[[str], None] | None = None,
     on_progress: Callable[[], None] | None = None,
     transcript: bool = False,
+    transcript_chars: int = 0,
     raw_complete: Callable[..., Any] | None = None,
     cost_fn: Callable[[Any], float] | None = None,
 ):
@@ -356,7 +381,7 @@ def make_metered_complete(
         _emit(
             log,
             f"[meter] {provider} · {effective_model} · ${cost:.4f} · "
-            f"lineage ${running:.4f}{cap}",
+            f"{ptok}+{ctok} tok · lineage ${running:.4f}{cap}",
         )
         if on_progress is not None:  # an LLM call returned => observed progress
             try:
@@ -365,12 +390,14 @@ def make_metered_complete(
                 pass
 
         out = _normalize(response)
-        if log and transcript:  # the agent's "said" + what it's about to "do"
+        if log and transcript:  # the agent's "said" + what it's about to "do", in full
             try:
                 if out.content and out.content.strip():
-                    log(f"  · says: {redact(clip(out.content, 1000))}")
+                    log(
+                        "  · says: " + clip_lines(redact(out.content), transcript_chars)
+                    )
                 for tc in out.tool_calls:
-                    log(f"  · calls {tc.name}({redact(args_summary(tc.arguments))})")
+                    log(format_call(tc.name, tc.arguments, transcript_chars))
             except Exception:  # noqa: BLE001 - observability is never load-bearing
                 pass
         return out
