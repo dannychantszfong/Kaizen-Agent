@@ -179,6 +179,103 @@ def _normalize(response: Any):
     return Completion(content=getattr(message, "content", None), tool_calls=tool_calls)
 
 
+def _est_msg_tokens(m: dict) -> int:
+    """Conservative chars->tokens estimate for one chat message (over-estimates so
+    trimming stays safely under the real limit; no tokenizer/SDK needed)."""
+    c = m.get("content")
+    text = c if isinstance(c, str) else json.dumps(c or "")
+    total = len(text) // 3 + 4
+    for tc in m.get("tool_calls") or []:
+        total += len(json.dumps(tc)) // 3
+    return total
+
+
+def _context_limit(model: str) -> int:
+    """Best-effort max INPUT tokens for the model, with a conservative default for an
+    unknown model (so an exotic small-context model never overflows)."""
+    try:
+        import litellm
+
+        info = litellm.get_model_info(model) or {}
+        m = info.get("max_input_tokens") or info.get("max_tokens")
+        if m:
+            return int(m)
+    except Exception:  # noqa: BLE001 - unknown model / no SDK
+        pass
+    return 30000
+
+
+def fit_context(model: str, messages, *, log=None):  # noqa: ANN001
+    """Return `messages` trimmed to fit the model's context window: keep the system
+    message and the MOST RECENT turns, dropping the oldest, so a long-running
+    generation can't blow past the input limit and crash. Pairing-safe: never leaves a
+    `tool` result without the assistant turn that called it. The agent's own message
+    history is untouched; only the API call sees the window (durable memory is
+    MEMORY.md). Reserves room for the response + estimate error."""
+    if not messages:
+        return messages
+    budget = max(2000, int(_context_limit(model) * 0.7))
+    counts = [_est_msg_tokens(m) for m in messages]
+    if sum(counts) <= budget:
+        return messages
+    system, rest = messages[:1], list(messages[1:])
+    rest_counts = counts[1:]
+    running = counts[0] + sum(rest_counts)
+    while rest and running > budget:
+        running -= rest_counts.pop(0)
+        rest.pop(0)
+    while rest and rest[0].get("role") == "tool":  # don't orphan a tool result
+        rest.pop(0)
+    trimmed = system + rest
+    if log and len(trimmed) < len(messages):
+        log(
+            f"  · context trim: {len(messages)} -> {len(trimmed)} msgs "
+            f"(~{budget} tok budget) to fit {model}"
+        )
+    return trimmed
+
+
+_TRANSIENT_ERRORS = (
+    "RateLimit",
+    "Timeout",
+    "APIConnection",
+    "ServiceUnavailable",
+    "InternalServer",
+    "Overloaded",
+    "APIError",
+)
+
+
+def _call_with_retry(raw, model, messages, tools, *, attempts=3, log=None):  # noqa: ANN001
+    """Call the provider, retrying clearly-transient errors with backoff, and logging
+    any provider error legibly (one line, not litellm's multi-line footer) before
+    raising. A non-transient error (or exhausted retries) propagates so the runner's
+    dirty-death/rollback handles it."""
+    import time as _time
+
+    for i in range(attempts):
+        try:
+            return raw(
+                model=model,
+                messages=messages,
+                tools=tools or None,
+                tool_choice="auto" if tools else None,
+            )
+        except Exception as e:  # noqa: BLE001
+            name = type(e).__name__
+            transient = any(t in name for t in _TRANSIENT_ERRORS)
+            retrying = transient and i + 1 < attempts
+            _emit(
+                log,
+                f"[meter] provider error ({name})"
+                + (" — retrying" if retrying else "")
+                + f": {clip(str(e), 200)}",
+            )
+            if not retrying:
+                raise
+            _time.sleep(min(8.0, 2.0**i))
+
+
 def make_metered_complete(
     meter: CostMeter,
     *,
@@ -205,18 +302,18 @@ def make_metered_complete(
 
     def complete(model_arg: str, messages, tools=None):  # noqa: ANN001
         effective_model = model_arg or model or "?"
+        # Keep the prompt within the model's context window so a long-running
+        # generation can't overflow and crash; retry transient provider errors.
+        messages = fit_context(
+            effective_model, messages, log=log if transcript else None
+        )
         _raw = raw_complete
         if _raw is None:
             import litellm
 
             _raw = litellm.completion
 
-        response = _raw(
-            model=effective_model,
-            messages=messages,
-            tools=tools or None,
-            tool_choice="auto" if tools else None,
-        )
+        response = _call_with_retry(_raw, effective_model, messages, tools, log=log)
 
         usage = getattr(response, "usage", None)
         ptok = int(getattr(usage, "prompt_tokens", 0) or 0)

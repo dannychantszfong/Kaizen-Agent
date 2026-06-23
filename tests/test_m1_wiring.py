@@ -466,3 +466,90 @@ def test_intra_generation_budget_halts_cleanly(lineage_repo: Path) -> None:
     assert wake is not None and wake.halt
     assert store.read_last_good() == good
     assert status.generation == 0
+
+
+# --- context-window fit + transient-error retry -----------------------------
+
+
+def test_fit_context_keeps_small_conversation() -> None:
+    from substrate.metering import fit_context
+
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "hi"},
+    ]
+    # Under budget -> returned unchanged (same object).
+    assert fit_context("deepseek/deepseek-chat", msgs) is msgs
+
+
+def test_fit_context_trims_long_conversation_pairing_safe() -> None:
+    from substrate.metering import _est_msg_tokens, fit_context
+
+    system = {"role": "system", "content": "SYSTEM"}
+    msgs = [system]
+    for i in range(60):  # 60 big assistant(tool_call)+tool pairs => far over any window
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": "x" * 4000,
+                "tool_calls": [
+                    {
+                        "id": f"t{i}",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        msgs.append({"role": "tool", "tool_call_id": f"t{i}", "content": "y" * 4000})
+
+    trimmed = fit_context("unknown/model-xyz", msgs)  # unknown -> default 30k limit
+    assert trimmed[0] is system  # system message always kept
+    assert len(trimmed) < len(msgs)  # actually trimmed
+    assert trimmed[1]["role"] != "tool"  # never a leading orphaned tool result
+    assert sum(_est_msg_tokens(m) for m in trimmed) <= int(30000 * 0.7)
+
+
+def test_metered_complete_retries_transient_then_succeeds() -> None:
+    from substrate.metering import CostMeter, make_metered_complete
+
+    class RateLimitError(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    def raw(**kwargs):  # noqa: ANN003
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RateLimitError("slow down")
+        msg = SimpleNamespace(content="ok", tool_calls=[])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=msg)],
+            usage=SimpleNamespace(prompt_tokens=5, completion_tokens=2),
+            model=kwargs["model"],
+        )
+
+    meter = CostMeter()
+    complete = make_metered_complete(meter, raw_complete=raw, cost_fn=lambda _r: 0.001)
+    complete("deepseek/deepseek-chat", [{"role": "user", "content": "hi"}])
+    assert calls["n"] == 2  # retried the transient error once, then succeeded
+    assert meter.calls == 1
+
+
+def test_metered_complete_propagates_non_transient() -> None:
+    from substrate.metering import CostMeter, make_metered_complete
+
+    class BadRequestError(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    def raw(**kwargs):  # noqa: ANN003
+        calls["n"] += 1
+        raise BadRequestError("malformed")
+
+    meter = CostMeter()
+    complete = make_metered_complete(meter, raw_complete=raw, cost_fn=lambda _r: 0.0)
+    with pytest.raises(BadRequestError):
+        complete("deepseek/deepseek-chat", [{"role": "user", "content": "hi"}])
+    assert calls["n"] == 1  # non-transient errors are not retried
