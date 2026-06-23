@@ -92,7 +92,11 @@ services:
       - no-new-privileges:true
     # No --privileged, no docker socket mounted: the box cannot reach the host
     # daemon or escalate to the host.
-    restart: unless-stopped
+    # on-failure (not unless-stopped): a clean HALT — roadmap complete, budget/
+    # generation cap, crash-loop — exits 0 and the container STOPS (the lineage is
+    # done); only an actual watchdog crash (non-zero exit) restarts. Without this a
+    # halt restart-loops: the watchdog re-reads the halt sentinel and exits 0 forever.
+    restart: on-failure
 
 networks:
   internal:
