@@ -43,6 +43,13 @@ kaizen-bootcheck-*/
 # harvested lineages (host-side output of tools/harvest.py) — local, can be large
 runs/
 
+# host-side live journal and combined runtime logs
+/journal/
+*.log
+
+# accidental empty shell-output file
+/a
+
 # OS cruft
 .DS_Store
 Thumbs.db

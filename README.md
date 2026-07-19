@@ -84,3 +84,20 @@ a fresh clone: read the skeleton → interview the developer → discuss → bui
   extension recipes (add a tool, a hook, a skill, swap the provider).
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — the grain to keep while you build on it.
 - [`skills/`](skills/) — what a skill is, and a runnable `lines` example.
+
+---
+To turn it on — restart (this also brings in every recent fix)
+A restart is needed because the code runs from the volume (which still holds the older copy). The fresh path gets you all of it at once — full transcript + live journal, context-window fit, transient-error retry, and restart-on-halt:
+
+
+docker compose --env-file .env -f containment/docker-compose.yml down -v
+docker compose --env-file .env -f containment/docker-compose.yml up --build
+(Or, to keep the current lineage, the in-place docker run … cp … refresh from earlier, then up -d.)
+
+Reading / saving it live
+
+# follow live
+docker compose --env-file .env -f containment/docker-compose.yml logs -f kaizen
+# the per-generation journals are now complete + live on the volume:
+docker run --rm -v containment_lineage:/lineage -v "${PWD}:/out" alpine cp -r /lineage/substrate/journal /out/journal
+That's the full "watch everything it says, thinks, and does" pass. If anything in the stream is still less detailed than you want (e.g. you'd like per-call latency, or the raw request JSON), say the word and I'll add it.
