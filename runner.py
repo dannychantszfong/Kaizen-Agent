@@ -35,12 +35,13 @@ from pathlib import Path
 # both live at <root>/, with the body at <root>/agent/src.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "agent" / "src"))
 
-from substrate import body as body_mod  # noqa: E402
-from substrate import liveness  # noqa: E402
-from substrate.config import Config  # noqa: E402
-from substrate.guardrail import SubstrateHooks  # noqa: E402
-from substrate.metering import CostMeter, make_metered_complete  # noqa: E402
-from substrate.state_store import StateStore, Status  # noqa: E402
+from substrate import body as body_mod
+from substrate import liveness
+from substrate.config import Config
+from substrate.guardrail import SubstrateHooks
+from substrate.metering import CostMeter, make_metered_complete
+from substrate.progress import ground_truth, is_substantive
+from substrate.state_store import StateStore, Status
 
 
 class Exit(IntEnum):
@@ -61,6 +62,7 @@ def _git(config: Config, *args: str, check: bool = True) -> subprocess.Completed
         ["git", "-C", str(config.root), *args],
         capture_output=True,
         text=True,
+        check=False,
     )
     if check and proc.returncode != 0:
         raise GitError(
@@ -74,9 +76,9 @@ class Runner:
         self,
         config: Config,
         *,
-        body_runner=None,  # noqa: ANN001
-        provider_factory=None,  # noqa: ANN001 - (config, meter) -> complete()
-        log=None,  # noqa: ANN001
+        body_runner=None,
+        provider_factory=None,
+        log=None,
     ) -> None:
         self.config = config
         self._extra_log = log
@@ -176,8 +178,11 @@ class Runner:
             log=self.log,
             generation=gen,
             complete=complete,
-            over_budget=lambda: (status.budget_spent_usd + meter.total_usd)
-            >= self.config.budget_cap_usd,
+            ground_truth=ground_truth(self.config, status, self.store.read_last_good()),
+            over_budget=lambda: (
+                (status.budget_spent_usd + meter.total_usd)
+                >= self.config.budget_cap_usd
+            ),
         )
 
         # Background liveness monitor: stamps last-progress while a child in this
@@ -275,12 +280,16 @@ class Runner:
             self.log("birth: no last_good yet (generation 0)")
 
     # -- the termination protocol -------------------------------------------
-    def _terminate(self, status: Status, sink) -> int:  # noqa: ANN001
+    def _terminate(self, status: Status, sink) -> int:
         # 1. persist state first.
         self.store.save_status(status)
         self.log("protocol 1/5: state persisted")
 
         # 2. commit the candidate body.
+        previous = (
+            self.store.read_last_good()
+            or _git(self.config, "rev-parse", "HEAD").stdout.strip()
+        )
         sha = self._commit_candidate(status.generation, sink.reason)
         self.log(f"protocol 2/5: committed candidate {sha[:10]}")
 
@@ -293,14 +302,47 @@ class Runner:
             return self._finish_dirty(status, "boot-check failed", rolled_back=True)
         self.log(f"protocol 3/5: boot-check passed ({detail})")
 
+        # Compare committed trees against the last blessed body, not mutable
+        # memory or the candidate's parent (which the body may have committed).
+        # Deletions and renames count conservatively as substance too.
+        changed = _git(
+            self.config,
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            previous,
+            sha,
+            "--",
+            "agent/",
+        ).stdout.split("\0")
+        substantive = any(
+            is_substantive(p.removeprefix("agent/"), self.config) for p in changed if p
+        )
+        status.consecutive_no_substance = (
+            0 if substantive else status.consecutive_no_substance + 1
+        )
+        completion_loop = (
+            status.consecutive_no_substance >= self.config.completion_loop_threshold
+        )
+        self.log(
+            f"completion detector: {status.consecutive_no_substance}/"
+            f"{self.config.completion_loop_threshold} graceful generations "
+            "without substantive committed changes"
+        )
+
         # 4. bless last_good = C (only now is the candidate a known-good target).
         self.store.write_last_good(sha)
         self.log(f"protocol 4/5: blessed last_good = {sha[:10]}")
 
         # 5. wake or halt.
-        if sink.roadmap_complete:
-            self.store.write_halt(sink.reason)
-            self.log("protocol 5/5: roadmap complete -> HALT sentinel written")
+        if sink.roadmap_complete or completion_loop:
+            status.halted = True
+            status.halt_reason = (
+                "roadmap_complete" if sink.roadmap_complete else "completion-loop"
+            )
+            self.store.write_halt(status.halt_reason)
+            self.log(f"protocol 5/5: {status.halt_reason} -> HALT sentinel written")
         else:
             at = time.time() + (sink.wake_after or 0.0)
             self.store.write_wake(at, sink.reason)
@@ -322,6 +364,7 @@ class Runner:
         self, status: Status, reason: str, rolled_back: bool = False
     ) -> int:
         status.consecutive_dirty += 1
+        status.consecutive_no_substance = 0
         self.store.save_status(status)
         self.log(
             f"generation ended DIRTY: {reason} "
@@ -381,7 +424,7 @@ class Runner:
                 if stat
                 else "changed this generation: (no tracked code changes)"
             )
-        except Exception:  # noqa: BLE001 - observability, never load-bearing
+        except Exception:  # noqa: S110, BLE001 - observability, never load-bearing
             pass
         return sha
 
@@ -397,6 +440,7 @@ class Runner:
                 capture_output=True,
                 text=True,
                 timeout=cfg.boot_check_timeout_seconds,
+                check=False,
             )
             detail = (proc.stdout + proc.stderr).strip().replace("\n", " | ")
             return proc.returncode == 0, detail

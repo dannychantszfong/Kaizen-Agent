@@ -17,9 +17,8 @@ impossible.
 
 What it blocks (invariants #5/#6):
   - `bash`: sending signals / reaping processes (kill, taskkill, ...), editing
-    schedulers (crontab, systemctl, schtasks, ...), naming the immortal layer
-    (substrate/, watchdog.py, runner.py), or escaping agent/ via `..` / an absolute
-    path outside agent/.
+    schedulers (crontab, systemctl, schtasks, ...), writing outside agent/; read-only commands and standard output sinks
+    are allowed. Unknown shell commands receive conservative path screening.
   - `write` / `edit`: a target path that resolves outside agent/. The OS makes the
     immortal *code* read-only, but the runtime *state* (substrate/state, journal,
     .git) is agent-writable, so without this a path like `../substrate/state/last_good`
@@ -31,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from pathlib import Path
 
 from spine.hooks import BeforeToolCall, Hooks
@@ -60,24 +60,26 @@ _DENY_BINARIES = (
     "reboot",
 )
 
-# Names of the immortal layer. The body's writable world is agent/ only.
-_BLOCKED_REFERENCES = ("substrate", "watchdog.py", "runner.py")
-
-# A `..` segment that escapes the current directory.
-_PARENT_ESCAPE = re.compile(r"(?:^|[\s=:'\"(])\.\.(?:[\\/]|$)")
-
-# Absolute-looking path tokens: a Windows drive path (C:\ or C:/) or a POSIX
-# absolute path (/etc/...). The leading separator class avoids matching URL
-# schemes like https:// (the `/` there is preceded by ':') and `//`.
-_ABS_TOKEN = re.compile(
-    r"""(?:^|[\s'"=(])
-        (
-          [A-Za-z]:[\\/][^\s'";|&()<>]*
-          |
-          /[^\s'";|&()<>/][^\s'";|&()<>]*
-        )
-    """,
-    re.VERBOSE,
+# Known read-only shell operations may read paths anywhere. Unknown commands
+# retain conservative path screening: this is a guard against accidents, not a
+# shell sandbox. The container remains the security boundary.
+_READ_ONLY = frozenset(
+    {
+        "cat",
+        "head",
+        "tail",
+        "ls",
+        "pwd",
+        "wc",
+        "stat",
+        "file",
+        "diff",
+        "cmp",
+        "readlink",
+    }
+)
+_SINKS = frozenset(
+    {"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/1", "/dev/fd/2"}
 )
 
 
@@ -107,26 +109,73 @@ def inspect_bash_command(command: str, *, agent_dir: Path) -> str | None:
                 "#5/#6). Leave a wake note via `terminate` instead."
             )
 
-    for ref in _BLOCKED_REFERENCES:
-        if ref in lowered:
-            return (
-                f"Blocked: '{ref}' is part of the substrate — the immortal layer. "
-                "Your only writable tree is agent/ (invariants #2/#5)."
-            )
+    # Tokenize shell punctuation so each pipeline/command and every redirect is
+    # checked independently. Do not grant a read exemption to command substitution.
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>()")
+        lexer.whitespace_split = True
+        lexer.escape = ""  # preserve Windows path separators in offline tests
+        tokens = list(lexer)
+    except ValueError:
+        return "Blocked: cannot safely inspect malformed shell quoting."
 
-    if _PARENT_ESCAPE.search(command):
-        return (
-            "Blocked: a '..' path escape. You may only touch paths under agent/ "
-            "(invariant #5)."
-        )
-
-    for m in _ABS_TOKEN.finditer(command):
-        token = m.group(1)
-        if not _within(token, agent_dir):
-            return (
-                f"Blocked: absolute path '{token}' is outside agent/. Your only "
-                "writable tree is agent/ (invariant #5)."
-            )
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token in {";", "&&", "||", "|", "&", "(", ")"}:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    for segment in segments:
+        operands: list[str] = []
+        i = 0
+        while i < len(segment):
+            token = segment[i]
+            if ">" in token and set(token) <= set("<>&|"):
+                i += 1
+                if i >= len(segment):
+                    return "Blocked: missing redirection target."
+                target = segment[i]
+                if target not in _SINKS and not (
+                    "&" in token and (target.isdigit() or target == "-")
+                ):
+                    reason = inspect_path(target, agent_dir=agent_dir)
+                    if reason:
+                        return reason
+            elif token == "<":
+                i += 1  # input redirection reads; filesystem permissions apply
+            else:
+                operands.append(token)
+            i += 1
+        if not operands:
+            continue
+        binary = operands[0]
+        readonly = binary in _READ_ONLY
+        if binary in {"grep", "rg"}:
+            readonly = not any(x.startswith("--pre") for x in operands[1:])
+        if readonly and not any(x in command for x in ("$(", "`", "\n")):
+            continue
+        for token in operands:
+            if Path(token).is_absolute():
+                # Preserve quoted paths containing spaces as one real path.
+                if token in _SINKS:
+                    continue
+                reason = inspect_path(token, agent_dir=agent_dir)
+                if reason:
+                    return reason
+                continue
+            # Include paths embedded in simple interpreter code / options, as the
+            # old guard did; do not confuse test_runner.py with ../runner.py.
+            for path in re.split(r"[\s='\"(),]+", token):
+                if path in _SINKS:
+                    continue
+                if (
+                    path.startswith(("/", "..", "\\"))
+                    or ".." in path.replace("\\", "/").split("/")
+                    or re.match(r"^[A-Za-z]:[\\/]", path)
+                ):
+                    reason = inspect_path(path, agent_dir=agent_dir)
+                    if reason:
+                        return reason
 
     return None
 
@@ -145,15 +194,7 @@ def inspect_path(path: str, *, agent_dir: Path) -> str | None:
     if not isinstance(path, str) or not path.strip():
         return None  # let the tool's own validation handle an empty/odd path
 
-    lowered = path.replace("\\", "/").lower()
-    for ref in _BLOCKED_REFERENCES:
-        if ref in lowered:
-            return (
-                f"Blocked: '{ref}' is part of the substrate — the immortal layer. "
-                "Your only writable tree is agent/ (invariants #2/#5)."
-            )
-
-    candidate = Path(path)
+    candidate = Path(path.replace("\\", "/"))
     if not candidate.is_absolute():
         candidate = agent_dir / candidate
     if not _within(str(candidate), agent_dir):
@@ -172,7 +213,7 @@ class SubstrateHooks(Hooks):
     which is why they live together here rather than in the body.
     """
 
-    def __init__(self, config, store, *, log=None) -> None:  # noqa: ANN001
+    def __init__(self, config, store, *, log=None) -> None:
         self.config = config
         self.store = store
         self._log = log or (lambda _msg: None)
@@ -181,7 +222,7 @@ class SubstrateHooks(Hooks):
         # (the idle-nudge escalation). The agent cannot touch this.
         self.tool_calls = 0
 
-    def before_tool_call(self, tool: Tool, args, agent) -> BeforeToolCall:  # noqa: ANN001
+    def before_tool_call(self, tool: Tool, args, agent) -> BeforeToolCall:
         if tool.name == "bash":
             reason = inspect_bash_command(args.command, agent_dir=self.config.agent_dir)
             if reason:
@@ -196,7 +237,7 @@ class SubstrateHooks(Hooks):
 
     def after_tool_call(
         self, tool: Tool, args, result: ToolResult, agent
-    ) -> ToolResult:  # noqa: ANN001
+    ) -> ToolResult:
         """Fires after a tool actually executes (blocked tools never reach here).
 
         Two substrate-owned jobs, plus invariant #4. An executed tool call is an
@@ -218,7 +259,7 @@ class SubstrateHooks(Hooks):
                     self._log(f"  · {tool.name} → {flag}:\n{block}")
                 else:
                     self._log(f"  · {tool.name} → {flag}: {body}")
-            except Exception:  # noqa: BLE001 - observability never breaks a tool call
+            except Exception:  # noqa: S110, BLE001 - observability never breaks a tool call
                 pass
         if tool.name in _MUTATING_TOOLS:
             mirrored = self.store.mirror_agent_to_state()
@@ -226,7 +267,7 @@ class SubstrateHooks(Hooks):
                 self._log(f"checkpoint: mirrored {', '.join(mirrored)} to state")
         return result
 
-    def session_end(self, agent) -> None:  # noqa: ANN001
+    def session_end(self, agent) -> None:
         """Final backstop mirror. Fires from `Agent.run`'s `finally`, so it runs
         even when a turn ends by exception — but the per-tool mirror above means
         the lineage is already current; this just catches a last unsynced write.

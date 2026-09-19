@@ -26,9 +26,9 @@ from pathlib import Path
 # __init__ pulls in the guardrail (which subclasses spine's Hooks at import time).
 sys.path.insert(0, str(Path(__file__).resolve().parent / "agent" / "src"))
 
-from substrate import liveness  # noqa: E402
-from substrate.config import Config  # noqa: E402
-from substrate.state_store import StateStore  # noqa: E402
+from substrate import liveness
+from substrate.config import Config
+from substrate.state_store import StateStore
 
 
 class Watchdog:
@@ -36,8 +36,8 @@ class Watchdog:
         self,
         config: Config,
         *,
-        spawn=None,  # noqa: ANN001 - () -> subprocess.Popen-like
-        log=None,  # noqa: ANN001
+        spawn=None,
+        log=None,
         max_total_spawns: int | None = None,
     ) -> None:
         self.config = config
@@ -83,6 +83,7 @@ class Watchdog:
                 ["git", "-C", str(self.config.root), "rev-parse", "HEAD"],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             if head.returncode == 0 and head.stdout.strip():
                 self.store.write_last_good(head.stdout.strip())
@@ -172,6 +173,10 @@ class Watchdog:
             self.consecutive_no_progress = 0
             self.log(f"generation advanced {before} -> {after}")
         else:
+            # Includes a hard kill before the runner can record its dirty death.
+            status = self.store.load_status()
+            status.consecutive_no_substance = 0
+            self.store.save_status(status)
             self.consecutive_no_progress += 1
             how = "killed (stale heartbeat)" if killed else "exited without progress"
             self.log(
@@ -179,7 +184,7 @@ class Watchdog:
                 f"(consecutive_no_progress={self.consecutive_no_progress})"
             )
 
-    def _supervise(self, proc) -> bool:  # noqa: ANN001
+    def _supervise(self, proc) -> bool:
         """Watch one runner until it exits or hangs. Returns True if we killed it."""
         while True:
             if proc.poll() is not None:
@@ -200,12 +205,12 @@ class Watchdog:
                 proc.kill()
                 try:
                     proc.wait(timeout=5)
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: S110, BLE001
                     pass
                 return True
             time.sleep(self.config.supervise_poll_seconds)
 
-    def _kill_subtree(self, proc) -> None:  # noqa: ANN001
+    def _kill_subtree(self, proc) -> None:
         """Kill the runner's children (the agent's process subtree). The runner
         process itself is killed by the caller."""
         pid = getattr(proc, "pid", None)
@@ -213,10 +218,10 @@ class Watchdog:
             return
         try:
             liveness.reap_new_children(pid, set(), log=self.log)
-        except Exception:  # noqa: BLE001 - cleanup is best-effort, never fatal
+        except Exception:  # noqa: S110, BLE001 - cleanup is best-effort, never fatal
             pass
 
-    def _sweep(self, proc) -> None:  # noqa: ANN001
+    def _sweep(self, proc) -> None:
         """After a generation ends, sweep leftover descendants so none leak across
         lives. On POSIX, kill the runner's process group (it led its own session via
         start_new_session, so reparented `&` children share its pgid). Plus a

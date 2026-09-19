@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from spine.tools import BashTool, EditTool, ReadTool, WriteTool
 
-
 # -- read -------------------------------------------------------------------
 
 

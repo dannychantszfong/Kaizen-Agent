@@ -136,10 +136,10 @@ def test_wedged_generation_reaped(lineage_repo: Path) -> None:
 def _provider_factory(script):
     """A provider_factory whose complete() replays `script(call_index) -> Completion`."""
 
-    def factory(config, meter):  # noqa: ANN001
+    def factory(config, meter):
         calls = {"n": 0}
 
-        def complete(model, messages, tools=None):  # noqa: ANN001
+        def complete(model, messages, tools=None):
             i = calls["n"]
             calls["n"] += 1
             return script(i)
@@ -156,6 +156,7 @@ def _bless_initial(cfg: Config) -> str:
         ["git", "-C", str(cfg.root), "rev-parse", "HEAD"],
         capture_output=True,
         text=True,
+        check=False,
     ).stdout.strip()
     store.write_last_good(good)
     return good
@@ -233,7 +234,7 @@ def test_orphaned_child_reaped_at_end(lineage_repo: Path) -> None:
     _bless_initial(cfg)
     holder: list[int] = []
 
-    def body_that_leaks_a_child(ctx) -> None:  # noqa: ANN001
+    def body_that_leaks_a_child(ctx) -> None:
         # Start a long-lived child and "forget" it, then terminate. The runner must
         # reap it at generation end so it doesn't leak into the next life.
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
@@ -287,7 +288,7 @@ def test_reap_new_children_kills_only_new() -> None:
             try:
                 p.kill()
                 p.wait(timeout=5)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: S110, BLE001
                 pass
 
 
@@ -297,7 +298,7 @@ def test_metering_stamps_progress_on_llm_return() -> None:
     ticks = {"n": 0}
     meter = __import__("substrate.metering", fromlist=["CostMeter"]).CostMeter()
 
-    def raw(**kwargs):  # noqa: ANN003
+    def raw(**kwargs):
         msg = SimpleNamespace(content="hi", tool_calls=[])
         return SimpleNamespace(
             choices=[SimpleNamespace(message=msg)],

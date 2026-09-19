@@ -30,11 +30,10 @@ Usage (one command, run from the repo root):
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # The shell run inside a throwaway alpine/git container: copy the lineage out and
@@ -108,7 +107,9 @@ def parse_journal(path: Path, gen: int) -> dict:
     attempts = len(_RE_BIRTH.findall(text))
 
     lg = _RE_LASTGOOD.search(text)
-    birth_ref = _short(lg.group(1)) if lg else ("none" if _RE_NOLASTGOOD.search(text) else "—")
+    birth_ref = (
+        _short(lg.group(1)) if lg else ("none" if _RE_NOLASTGOOD.search(text) else "—")
+    )
 
     # final outcome = the LAST terminal event in the file (gens can respawn dirty
     # several times before a clean bless; the journal is appended each attempt).
@@ -127,7 +128,9 @@ def parse_journal(path: Path, gen: int) -> dict:
 
     blessed = _RE_BLESSED.findall(text)
     committed = _RE_COMMITTED.findall(text)
-    final_commit = _short(blessed[-1] if blessed else (committed[-1] if committed else None))
+    final_commit = _short(
+        blessed[-1] if blessed else (committed[-1] if committed else None)
+    )
 
     return {
         "gen": gen,
@@ -169,13 +172,20 @@ def _oneline(s: str, n: int = 100) -> str:
 
 def run_container(volume: str, image: str, out_dir: Path) -> None:
     cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{volume}:/lineage:ro",
-        "-v", f"{out_dir.resolve()}:/out",
-        "--entrypoint", "sh",
-        image, "-c", _CONTAINER_SCRIPT,
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{volume}:/lineage:ro",
+        "-v",
+        f"{out_dir.resolve()}:/out",
+        "--entrypoint",
+        "sh",
+        image,
+        "-c",
+        _CONTAINER_SCRIPT,
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if "HARVEST_OK" not in proc.stdout:
         sys.stderr.write(proc.stdout + "\n" + proc.stderr + "\n")
         raise SystemExit(
@@ -215,12 +225,16 @@ def _write_summary(out_dir: Path, rows: list[dict]) -> None:
     lines = [
         "# Run summary",
         "",
-        f"Generations: {len(rows)} · "
-        f"total cost: ${sum(r['cost'] for r in rows):.4f} · "
-        f"total tokens: {sum(r['tokens'] for r in rows):,}",
+        (
+            f"Generations: {len(rows)} · "
+            f"total cost: ${sum(r['cost'] for r in rows):.4f} · "
+            f"total tokens: {sum(r['tokens'] for r in rows):,}"
+        ),
         "",
-        "| gen | birth last_good | outcome | cost | tokens | tool calls | blocks | "
-        "terminate reason | final commit |",
+        (
+            "| gen | birth last_good | outcome | cost | tokens | tool calls | blocks | "
+            "terminate reason | final commit |"
+        ),
         "|----:|---|---|---:|---:|---:|---:|---|---|",
     ]
     for r in rows:
@@ -232,8 +246,10 @@ def _write_summary(out_dir: Path, rows: list[dict]) -> None:
         )
     lines += [
         "",
-        "_tool calls / blocks are recorded only when log_transcript was on for that "
-        "run; older runs may show 0._",
+        (
+            "_tool calls / blocks are recorded only when log_transcript was on for that "
+            "run; older runs may show 0._"
+        ),
         "",
     ]
     (out_dir / "RUN_SUMMARY.md").write_text("\n".join(lines), encoding="utf-8")
@@ -243,8 +259,12 @@ def _write_index(out_dir: Path, rows: list[dict]) -> None:
     lines = ["# Journal index", ""]
     for r in rows:
         name = f"gen-{r['gen']:04d}-{r['tag']}.log"
-        lines.append(f"- **gen {r['gen']}** → **{r['outcome']}** — {_oneline(r['reason'], 160)}")
-        lines.append(f"  - journal: `journal/{name}` · diff: `git/diffs/gen-{r['gen']:04d}-*.diff`")
+        lines.append(
+            f"- **gen {r['gen']}** → **{r['outcome']}** — {_oneline(r['reason'], 160)}"
+        )
+        lines.append(
+            f"  - journal: `journal/{name}` · diff: `git/diffs/gen-{r['gen']:04d}-*.diff`"
+        )
     (out_dir / "INDEX.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -257,13 +277,17 @@ def _rename_journals(journal_dir: Path, rows: list[dict]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Harvest a Kaizen lineage from its volume.")
-    p.add_argument("--volume", default="containment_lineage", help="Docker volume name.")
+    p.add_argument(
+        "--volume", default="containment_lineage", help="Docker volume name."
+    )
     p.add_argument("--out", default="./runs", help="Host output base directory.")
-    p.add_argument("--image", default="alpine/git", help="Image with git (for the report).")
+    p.add_argument(
+        "--image", default="alpine/git", help="Image with git (for the report)."
+    )
     p.add_argument("--run-id", default=None, help="Override the run folder name.")
     args = p.parse_args(argv)
 
-    run_id = args.run_id or "run-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = args.run_id or "run-" + datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     out_dir = Path(args.out) / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -271,8 +295,12 @@ def main(argv: list[str] | None = None) -> int:
     run_container(args.volume, args.image, out_dir)
     rows = build_reports(out_dir)
 
-    last_good = (out_dir / "git" / "LAST_GOOD.txt")
-    lg = last_good.read_text(encoding="utf-8").strip()[:10] if last_good.exists() else "—"
+    last_good = out_dir / "git" / "LAST_GOOD.txt"
+    lg = (
+        last_good.read_text(encoding="utf-8").strip()[:10]
+        if last_good.exists()
+        else "—"
+    )
     print(f"[harvest] done. {len(rows)} generation(s); final last_good = {lg}")
     print(f"[harvest] open: {out_dir / 'RUN_SUMMARY.md'}")
     print(f"[harvest]       {out_dir / 'INDEX.md'}")

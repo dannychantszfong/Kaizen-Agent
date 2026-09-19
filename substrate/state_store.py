@@ -30,6 +30,7 @@ class Status:
     budget_spent_usd: float = 0.0
     last_generation_cost_usd: float = 0.0
     consecutive_dirty: int = 0
+    consecutive_no_substance: int = 0
     halted: bool = False
     halt_reason: str = ""
 
@@ -56,7 +57,7 @@ class StateStore:
     # masquerading as silent wedge reap-thrash.
     _HB_WARN_AFTER = 5
 
-    def __init__(self, config: Config, *, log=None) -> None:  # noqa: ANN001
+    def __init__(self, config: Config, *, log=None) -> None:
         self.config = config
         self._log = log or (lambda _msg: None)
         self._hb_fail_streak = 0

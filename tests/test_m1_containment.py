@@ -40,7 +40,7 @@ def _docker_daemon() -> bool:
     try:
         return (
             subprocess.run(
-                ["docker", "info"], capture_output=True, timeout=30
+                ["docker", "info"], capture_output=True, timeout=30, check=False
             ).returncode
             == 0
         )
@@ -57,6 +57,7 @@ def test_compose_config_is_valid() -> None:
         ["docker", "compose", "-f", str(COMPOSE), "config"],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     rendered = proc.stdout
@@ -124,7 +125,7 @@ def _as_agent(image: str, script: str, *, volume: str | None = None):
     if volume:
         cmd += ["-v", f"{volume}:/lineage"]
     cmd += ["--entrypoint", "gosu", image, "agent", "sh", "-c", script]
-    return subprocess.run(cmd, capture_output=True, text=True)
+    return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
 @_heavy
@@ -171,3 +172,51 @@ def test_state_survives_container_removal(image: str) -> None:
         assert "gen-marker" in r.stdout, r.stderr
     finally:
         subprocess.run(["docker", "volume", "rm", "-f", vol], check=False)
+
+
+@_heavy
+def test_image_seed_has_no_prior_run_artifacts(image: str) -> None:
+    # Override the entrypoint: inspect the image without starting a watchdog/body.
+    script = """
+from pathlib import Path
+from fnmatch import fnmatchcase
+import subprocess
+root = Path('/lineage')
+bad_names = ('a', '*.log', '_idx.txt', '_wrk.txt', 'existing_works.txt',
+             'index_ids*.txt', 'work_files*.txt', '*-export', '*.pyc',
+             '__pycache__', '.pytest_cache', '.ruff_cache')
+for path in root.rglob('*'):
+    rel = path.relative_to(root)
+    if '.git' in rel.parts:
+        continue
+    assert not any(fnmatchcase(path.name, pat) for pat in bad_names), rel
+    if path.name == 'journal':
+        assert rel.as_posix() == 'substrate/journal', rel
+        assert not list(path.iterdir()), 'runtime journal must be empty'
+assert not list((root / 'substrate/state').iterdir())
+for name in ('runs', 'JOURNAL.md', 'agent/JOURNAL.md', 'agent/MEMORY.md',
+             'agent/ROADMAP.md', 'agent/TODO.json'):
+    assert not (root / name).exists(), name
+tracked = subprocess.check_output(['git', 'ls-files'], cwd=root, text=True).splitlines()
+assert '.gitignore' in tracked and 'agent/.gitignore' in tracked
+assert not any('journal' in Path(p).parts for p in tracked)
+print('clean image seed verified')
+"""
+    proc = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+            "python",
+            image,
+            "-c",
+            script,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr

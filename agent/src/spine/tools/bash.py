@@ -48,6 +48,7 @@ class BashTool:
                 capture_output=True,
                 text=True,
                 timeout=args.timeout,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             return ToolResult(

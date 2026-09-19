@@ -19,8 +19,9 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from substrate.config import Config
 
@@ -37,6 +38,7 @@ class BodyContext:
     log: Callable[[str], None]
     generation: int
     complete: Any  # metered `complete(model, messages, tools)` the runner injects
+    ground_truth: str = ""
     # () -> True once this generation's spend has reached the cap. The runner closes
     # it over the live meter; the turn loop checks it so a productive-but-never-
     # terminating generation can't burn unbounded budget before the watchdog (which
@@ -86,7 +88,7 @@ def resolve_model(config: Config) -> str:
     return config.model
 
 
-def build_agent(config: Config, *, sink, hooks, complete):  # noqa: ANN001
+def build_agent(config: Config, *, sink, hooks, complete):
     """Assemble the body: four tools + `terminate`, the guardrail hook, the prompt.
 
     The system prompt is read VERBATIM from the body's own `prompts/system.md`, so
@@ -148,7 +150,7 @@ def make_stub_provider(config: Config):
         ),
     ]
 
-    def complete(model, messages, tools=None):  # noqa: ANN001
+    def complete(model, messages, tools=None):
         return queue.pop(0) if queue else Completion(content="(stub exhausted)")
 
     return complete
@@ -177,7 +179,7 @@ def run_real_body(ctx: BodyContext) -> None:
     agent = build_agent(
         ctx.config, sink=ctx.sink, hooks=ctx.hooks, complete=ctx.complete
     )
-    message = _BIRTH_PROMPT
+    message = ctx.ground_truth + "\n" + _BIRTH_PROMPT
     no_progress_nudges = 0
     turn = 0
     while True:
@@ -301,7 +303,7 @@ def run_progress_body(ctx: BodyContext) -> None:
         )
     )
 
-    def complete(model, messages, tools=None):  # noqa: ANN001
+    def complete(model, messages, tools=None):
         return queue.pop(0) if queue else Completion(content="(done)")
 
     agent = build_agent(ctx.config, sink=ctx.sink, hooks=ctx.hooks, complete=complete)

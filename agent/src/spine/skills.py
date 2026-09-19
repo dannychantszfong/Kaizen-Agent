@@ -45,8 +45,10 @@ def skills_prompt(skills: list[Skill]) -> str:
     if not skills:
         return ""
     lines = [
-        "You have skills available. Each is a directory with a README.md "
-        "describing how to use it — read the README, then run it via `bash`:",
+        (
+            "You have skills available. Each is a directory with a README.md "
+            "describing how to use it — read the README, then run it via `bash`:"
+        ),
     ]
     for s in skills:
         lines.append(f"- {s.name} ({s.path}): {s.description}")

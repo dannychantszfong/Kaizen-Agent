@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # 2. Smoke run: one offline turn through the real loop — no tools, no network.
-    def _complete(model, messages, tools=None):  # noqa: ANN001
+    def _complete(model, messages, tools=None):
         return Completion(content="boot smoke ok")
 
     try:

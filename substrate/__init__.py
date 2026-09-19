@@ -13,7 +13,7 @@ __all__ = [
     "Config",
     "StateStore",
     "Status",
-    "WakeNote",
     "SubstrateHooks",
+    "WakeNote",
     "inspect_bash_command",
 ]

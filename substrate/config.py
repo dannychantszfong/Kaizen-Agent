@@ -22,6 +22,9 @@ _OVERRIDABLE = (
     "budget_cap_usd",
     "max_generations",
     "crash_loop_threshold",
+    "completion_loop_threshold",
+    "completion_ignored_globs",
+    "artifact_globs",
     "min_respawn_seconds",
     "heartbeat_timeout_seconds",
     "boot_check_timeout_seconds",
@@ -60,6 +63,28 @@ class Config:
     budget_cap_usd: float = 100.0
     max_generations: int = 1000
     crash_loop_threshold: int = 5
+    completion_loop_threshold: int = 3
+    # Case-sensitive globs relative to agent/. '*' includes directory separators.
+    # Only known output directories, never a blanket '*.html' exclusion.
+    completion_ignored_globs: tuple[str, ...] = (
+        "MEMORY.md",
+        "ROADMAP.md",
+        "TODO.json",
+        "JOURNAL.md",
+        "journal/*",
+        "site/*",
+        "_site/*",
+        "build/*",
+        "dist/*",
+        "__pycache__/*",
+        "*/__pycache__/*",
+        "*.pyc",
+        ".pytest_cache/*",
+        ".ruff_cache/*",
+    )
+    # A domain-neutral count of source artifacts, not a semantic count of works.
+    # Operators can narrow this to e.g. ('works/*.md',) for a particular lineage.
+    artifact_globs: tuple[str, ...] = ("*",)
 
     # -- timing
     # min_respawn_seconds is the pacing proxy: the minimum gap between consecutive
@@ -96,6 +121,8 @@ class Config:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "root", Path(self.root).resolve())
+        if self.completion_loop_threshold < 1:
+            raise ValueError("completion_loop_threshold must be at least 1")
 
     # -- derived paths (the directory layout from SPEC) ---------------------
     @property
@@ -179,7 +206,7 @@ class Config:
         return self.root / "runner.py"
 
     # -- persistence of the overridable knobs -------------------------------
-    def to_overrides(self) -> dict[str, float | int]:
+    def to_overrides(self) -> dict[str, object]:
         return {k: getattr(self, k) for k in _OVERRIDABLE}
 
     def save(self) -> None:
@@ -190,7 +217,7 @@ class Config:
         os.replace(tmp, self.config_path)
 
     @classmethod
-    def load(cls, root: str | Path) -> "Config":
+    def load(cls, root: str | Path) -> Config:
         """Build a Config for `root`, folding in any persisted overrides."""
         root = Path(root)
         cfgfile = root / "substrate" / "state" / "config.json"

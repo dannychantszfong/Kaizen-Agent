@@ -1,7 +1,7 @@
 """The four built-in tools. There is no fifth — `bash` is the escape hatch."""
 
-from spine.tools.bash import BashTool
 from spine.tools.base import Tool, ToolResult
+from spine.tools.bash import BashTool
 from spine.tools.edit import EditTool
 from spine.tools.read import ReadTool
 from spine.tools.write import WriteTool
@@ -13,11 +13,11 @@ def default_tools() -> list[Tool]:
 
 
 __all__ = [
+    "BashTool",
+    "EditTool",
+    "ReadTool",
     "Tool",
     "ToolResult",
-    "ReadTool",
     "WriteTool",
-    "EditTool",
-    "BashTool",
     "default_tools",
 ]

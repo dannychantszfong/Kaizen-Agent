@@ -23,7 +23,7 @@ exercised on the dev host and in the Linux container). Every psutil touch is gua
 from __future__ import annotations
 
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 
 def _children(pid: int) -> list:
@@ -46,7 +46,7 @@ def child_subtree_active(pid: int, last_cpu: dict[int, float]) -> bool:
         try:
             t = child.cpu_times()
             cpu = float(t.user + t.system)
-        except Exception:  # noqa: BLE001 - child vanished mid-poll, etc.
+        except Exception:  # noqa: S112, BLE001 - child vanished mid-poll, etc.
             continue
         seen.add(child.pid)
         prev = last_cpu.get(child.pid)
@@ -77,14 +77,14 @@ def reap_new_children(
         try:
             c.kill()
             killed += 1
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S110, BLE001
             pass
     if victims:
         try:
             import psutil
 
             psutil.wait_procs(victims, timeout=2)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S110, BLE001
             pass
     if killed and log:
         log(f"reaped {killed} leftover child process(es) at generation end")
@@ -117,7 +117,7 @@ class LivenessMonitor(threading.Thread):
             try:
                 if child_subtree_active(self._pid, self._last_cpu):
                     self._on_progress()
-            except Exception:  # noqa: BLE001 - never let monitoring crash the run
+            except Exception:  # noqa: S110, BLE001 - never let monitoring crash the run
                 pass
 
     def stop(self) -> None:

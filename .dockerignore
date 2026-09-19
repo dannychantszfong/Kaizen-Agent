@@ -1,7 +1,6 @@
 # Build context = repo root. Keep the image clean and let the Dockerfile create a
 # fresh git history (so the build host's .git never leaks into the lineage).
 .git
-.gitignore
 
 # Python / tooling caches
 **/__pycache__
@@ -11,6 +10,9 @@
 .pytest_cache
 .ruff_cache
 .mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
 
 # Virtual environments
 .venv
@@ -36,3 +38,18 @@ agent/TODO.json
 .claude
 .DS_Store
 Thumbs.db
+
+# Prior lineages, exports and local scratch never belong in the immortal seed.
+**/journal
+runs
+**/*-export
+**/a
+**/*.log
+**/_idx.txt
+**/_wrk.txt
+**/existing_works.txt
+**/index_ids*.txt
+**/work_files*.txt
+JOURNAL.md
+agent/JOURNAL.md
+.tmp*

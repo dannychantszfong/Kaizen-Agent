@@ -38,6 +38,7 @@ def head_sha(root: Path) -> str:
         ["git", "-C", str(root), "rev-parse", "HEAD"],
         capture_output=True,
         text=True,
+        check=False,
     ).stdout.strip()
 
 
@@ -57,7 +58,7 @@ def _fake_provider_response(*, cost: float):
     """A litellm-shaped response: a `terminate` tool call + a usage block. The
     metered complete reads cost + tokens off exactly this shape."""
 
-    def raw_complete(**kwargs):  # noqa: ANN003
+    def raw_complete(**kwargs):
         func = SimpleNamespace(
             name="terminate",
             arguments=json.dumps({"reason": "metered wiring test", "wake_after": 0}),
@@ -76,7 +77,7 @@ def test_metered_real_body_charges_budget(lineage_repo: Path) -> None:
     store = StateStore(cfg)
 
     # Inject a metered complete over a canned response carrying real usage + cost.
-    def provider_factory(config, meter):  # noqa: ANN001
+    def provider_factory(config, meter):
         return make_metered_complete(
             meter,
             model=config.model,
@@ -109,7 +110,7 @@ def test_body_exception_caught_and_rolled_back(lineage_repo: Path) -> None:
     good = _bless_initial(cfg)
     store = StateStore(cfg)
 
-    def exploding_body(ctx) -> None:  # noqa: ANN001
+    def exploding_body(ctx) -> None:
         raise RuntimeError("kaboom mid-life")
 
     code = Runner(cfg, body_runner=exploding_body).run_one_generation()
@@ -132,12 +133,12 @@ def test_continuous_checkpoint_survives_dirty_death(lineage_repo: Path) -> None:
     _bless_initial(cfg)
     store = StateStore(cfg)
 
-    def write_then_crash(ctx) -> None:  # noqa: ANN001
+    def write_then_crash(ctx) -> None:
         from spine.provider import Completion, ToolCall
 
         calls = {"n": 0}
 
-        def complete(model, messages, tools=None):  # noqa: ANN001
+        def complete(model, messages, tools=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 return Completion(
@@ -226,7 +227,7 @@ def test_gen0_bootstrap_seeds_and_blesses(lineage_repo: Path) -> None:
     _bless_initial(cfg)
     store = StateStore(cfg)
 
-    def gen0_body(ctx) -> None:  # noqa: ANN001
+    def gen0_body(ctx) -> None:
         from spine.provider import Completion, ToolCall
 
         queue = [
@@ -278,7 +279,7 @@ def test_gen0_bootstrap_seeds_and_blesses(lineage_repo: Path) -> None:
             ),
         ]
 
-        def complete(model, messages, tools=None):  # noqa: ANN001
+        def complete(model, messages, tools=None):
             return queue.pop(0) if queue else Completion(content="(done)")
 
         agent = body_mod.build_agent(
@@ -303,8 +304,8 @@ def _capturing_metered_factory(*, cost: float, seen: list[str]):
     """A provider_factory whose metered complete runs over a canned `terminate`
     response, records which model it was asked to run, and prices it at `cost`."""
 
-    def factory(config, meter):  # noqa: ANN001
-        def raw(**kwargs):  # noqa: ANN003
+    def factory(config, meter):
+        def raw(**kwargs):
             seen.append(kwargs["model"])
             func = SimpleNamespace(
                 name="terminate",
@@ -366,7 +367,7 @@ def test_meter_sums_spend_across_providers() -> None:
     meter = CostMeter()
     prices = {"deepseek/deepseek-chat": 0.02, "openai/gpt-4o-mini": 0.03}
 
-    def raw(**kwargs):  # noqa: ANN003
+    def raw(**kwargs):
         msg = SimpleNamespace(content="ok", tool_calls=[])
         return SimpleNamespace(
             choices=[SimpleNamespace(message=msg)],
@@ -391,7 +392,7 @@ def test_unpriceable_model_halts_lineage(lineage_repo: Path) -> None:
     good = _bless_initial(cfg)
     store = StateStore(cfg)
 
-    def factory(config, meter):  # noqa: ANN001
+    def factory(config, meter):
         def no_price(_response):  # litellm has no cost-map entry for this model
             raise RuntimeError("model not in litellm's cost map")
 
@@ -438,9 +439,9 @@ def test_intra_generation_budget_halts_cleanly(lineage_repo: Path) -> None:
     good = _bless_initial(cfg)
     store = StateStore(cfg)
 
-    def factory(config, meter):  # noqa: ANN001
+    def factory(config, meter):
         # A turn that does NOT terminate but bills $0.10 (> the $0.05 cap).
-        def raw(**kwargs):  # noqa: ANN003
+        def raw(**kwargs):
             msg = SimpleNamespace(content="still working, not done", tool_calls=[])
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=msg)],
@@ -518,7 +519,7 @@ def test_metered_complete_retries_transient_then_succeeds() -> None:
 
     calls = {"n": 0}
 
-    def raw(**kwargs):  # noqa: ANN003
+    def raw(**kwargs):
         calls["n"] += 1
         if calls["n"] < 2:
             raise RateLimitError("slow down")
@@ -544,7 +545,7 @@ def test_metered_complete_propagates_non_transient() -> None:
 
     calls = {"n": 0}
 
-    def raw(**kwargs):  # noqa: ANN003
+    def raw(**kwargs):
         calls["n"] += 1
         raise BadRequestError("malformed")
 

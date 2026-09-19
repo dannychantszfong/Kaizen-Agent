@@ -10,10 +10,11 @@ understood line by line.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from spine import provider
 from spine.hooks import Hooks
@@ -46,7 +47,9 @@ class Agent:
     ) -> None:
         self.model = model
         self.tools: dict[str, Tool] = {t.name: t for t in tools}
-        self.system_prompt = system_prompt if system_prompt is not None else _DEFAULT_SYSTEM_PROMPT
+        self.system_prompt = (
+            system_prompt if system_prompt is not None else _DEFAULT_SYSTEM_PROMPT
+        )
         self.hooks = hooks or Hooks()
         self.complete = complete or provider.complete
         self.max_iterations = max_iterations
@@ -142,7 +145,9 @@ class Agent:
 
         decision = self.hooks.before_tool_call(tool, args, self)
         if decision.blocked:
-            return ToolResult(decision.message or f"Blocked: {call.name}", is_error=True)
+            return ToolResult(
+                decision.message or f"Blocked: {call.name}", is_error=True
+            )
         if decision.args is not None:
             args = decision.args
 

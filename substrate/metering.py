@@ -28,8 +28,9 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 # Mask anything shaped like a provider API key (sk-..., sk-ant-..., sk-or-...) so a
 # stray `echo $DEEPSEEK_API_KEY` in a tool result can't leak into the logs.
@@ -133,7 +134,7 @@ def _emit(log: Callable[[str], None] | None, msg: str) -> None:
         return
     try:
         log(msg)
-    except Exception:  # noqa: BLE001 - logging is never load-bearing
+    except Exception:  # noqa: S110, BLE001 - logging is never load-bearing
         pass
 
 
@@ -154,7 +155,7 @@ def _price_with_litellm(response: Any, model: str, ptok: int, ctok: int):
         c = float(litellm.completion_cost(completion_response=response))
         if math.isfinite(c) and c > 0:
             return c, True
-    except Exception:  # noqa: BLE001 - fall through to the cost map
+    except Exception:  # noqa: S110, BLE001 - fall through to the cost map
         pass
 
     try:
@@ -164,7 +165,7 @@ def _price_with_litellm(response: Any, model: str, ptok: int, ctok: int):
         c = float(prompt_cost) + float(completion_cost)
         if math.isfinite(c):
             return c, True  # priced (may legitimately be 0.0 for a free model)
-    except Exception:  # noqa: BLE001 - model unknown to litellm's cost map
+    except Exception:  # noqa: S110, BLE001 - model unknown to litellm's cost map
         pass
 
     return 0.0, False
@@ -224,12 +225,12 @@ def _context_limit(model: str) -> int:
         m = info.get("max_input_tokens") or info.get("max_tokens")
         if m:
             return int(m)
-    except Exception:  # noqa: BLE001 - unknown model / no SDK
+    except Exception:  # noqa: S110, BLE001 - unknown model / no SDK
         pass
     return 30000
 
 
-def fit_context(model: str, messages, *, log=None):  # noqa: ANN001
+def fit_context(model: str, messages, *, log=None):
     """Return `messages` trimmed to fit the model's context window: keep the system
     message and the MOST RECENT turns, dropping the oldest, so a long-running
     generation can't blow past the input limit and crash. Pairing-safe: never leaves a
@@ -270,7 +271,7 @@ _TRANSIENT_ERRORS = (
 )
 
 
-def _call_with_retry(raw, model, messages, tools, *, attempts=3, log=None):  # noqa: ANN001
+def _call_with_retry(raw, model, messages, tools, *, attempts=3, log=None):
     """Call the provider, retrying clearly-transient errors with backoff, and logging
     any provider error legibly (one line, not litellm's multi-line footer) before
     raising. A non-transient error (or exhausted retries) propagates so the runner's
@@ -285,7 +286,7 @@ def _call_with_retry(raw, model, messages, tools, *, attempts=3, log=None):  # n
                 tools=tools or None,
                 tool_choice="auto" if tools else None,
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             name = type(e).__name__
             transient = any(t in name for t in _TRANSIENT_ERRORS)
             retrying = transient and i + 1 < attempts
@@ -325,7 +326,7 @@ def make_metered_complete(
     closure, never by the agent).
     """
 
-    def complete(model_arg: str, messages, tools=None):  # noqa: ANN001
+    def complete(model_arg: str, messages, tools=None):
         effective_model = model_arg or model or "?"
         # Keep the prompt within the model's context window so a long-running
         # generation can't overflow and crash; retry transient provider errors.
@@ -386,7 +387,7 @@ def make_metered_complete(
         if on_progress is not None:  # an LLM call returned => observed progress
             try:
                 on_progress()
-            except Exception:  # noqa: BLE001 - liveness stamp is never load-bearing
+            except Exception:  # noqa: S110, BLE001 - liveness stamp is never load-bearing
                 pass
 
         out = _normalize(response)
@@ -398,7 +399,7 @@ def make_metered_complete(
                     )
                 for tc in out.tool_calls:
                     log(format_call(tc.name, tc.arguments, transcript_chars))
-            except Exception:  # noqa: BLE001 - observability is never load-bearing
+            except Exception:  # noqa: S110, BLE001 - observability is never load-bearing
                 pass
         return out
 

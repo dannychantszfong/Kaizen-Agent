@@ -1,103 +1,128 @@
-# spine
+# Kaizen
 
-A minimal Python agent backbone: a language model, four tools, and a loop. It's a
-**foundation to build on** — you clone it and grow it into the agent you actually
-want, rather than running it as a finished product. If you're reading this in a
-fresh clone, this *is* your agent's repo; the next step is to shape it into yours.
+Kaizen is a self-evolving agent built on [spine](https://github.com/dannychantszfong/Spine),
+a minimal language-model loop with four tools: read, write, edit and bash.
+At generation zero it chooses its own purpose. It works on its body, requests
+termination, and is reborn in a fresh process from the code it leaves behind.
+Continuity lives in files, not in a running process.
 
-The design rationale and full spec live in [`doc/spine-spec.md`](doc/spine-spec.md);
-a code-level walkthrough is in [`doc/ARCHITECTURE.md`](doc/ARCHITECTURE.md); the
-always-on orientation for coding agents is in [`CLAUDE.md`](CLAUDE.md) and
-[`AGENTS.md`](AGENTS.md).
+The two layers have distinct responsibilities:
 
-## What's here
-
-```
-src/spine/
-  provider.py     # rented litellm wrapper: complete(model, messages, tools)
-  agent.py        # the loop, conversation state, tool dispatch, hooks
-  tools/          # read · write · edit · bash  (the only four)
-  hooks.py        # before/after_tool_call + session lifecycle; ships PERMISSIVE
-  skills.py       # skill discovery/loading seam
-  prompts/system.md
-main.py           # runnable entry point — the repo is the agent, so it lives at the root
-skills/           # capability-as-documentation; `lines/` is a worked example
-tests/
+```text
+IMMORTAL: watchdog.py (separate root process)
+              | spawns and supervises
+          runner.py + substrate/ (lifecycle, policy, metering, state)
+              | runs a generation; commits and boot-checks its successor
+MORTAL:   agent/ (editable spine body, tools, prompt, source content)
+              | checkpoints MEMORY.md / ROADMAP.md / TODO.json
+              +-- terminate request --> runner --> wake or halt
 ```
 
-The model gets exactly four tools — `read`, `write`, `edit`, `bash` — and `bash`
-is the escape hatch for everything else. The loop is hand-written and ~150 lines;
-read it top to bottom in `src/spine/agent.py`. The whole core is small enough to
-hold in your head, which is the point.
+The immortal code lives outside `agent/` and is root-owned and read-only to the
+agent. The runner and body share a non-root process; the root watchdog is separate.
+The body can rewrite its own code and prompt, but the lifecycle code stays outside
+its writable body tree.
 
-## Install
-
-```bash
-pip install -e ".[dev]"      # or: uv sync --extra dev
+```text
+agent/          Mortal body: spine, five tools including terminate, prompt, tests
+substrate/      Lifecycle helpers, guardrail, configuration, metering, boot-check
+  state/        Runtime carry-over, status, last_good, heartbeat and wake/halt note
+  journal/      Runtime per-generation logs
+containment/    Docker image, Compose topology and provider egress proxy
+tools/         Host utilities, including harvest.py
+runs/           Local harvested lineages (ignored by Git and Docker builds)
+doc/            Design specs, foundation architecture and containment details
+runner.py       One generation's birth, work and termination protocol
+watchdog.py     Rebirth, wake timing, caps and stalled-generation cleanup
 ```
 
-## Run it
+A generation starts from `last_good`, with carry-over files seeded into `agent/`.
+Its birth context supplies the actual zero-based generation number, source-artifact
+file count, lineage spend and `last_good`, overriding remembered figures.
+The agent checkpoints memory while working and calls `terminate` when ready.
+The runner persists state, commits a candidate locally, boot-checks it in a clean
+Git worktree, then blesses it as `last_good` and writes a wake or halt note.
+A failed boot-check rolls back. The watchdog starts the next generation unless a
+halt or cap applies. There is no automatic GitHub push.
 
-`litellm` reads provider credentials from the environment. For Anthropic:
+Explicit `roadmap_complete=true` halts the lineage. As a fallback, three consecutive
+boot-checked graceful generations with no substantive committed changes halt with
+`completion-loop`. Changes are compared against the previous blessed tree;
+MEMORY/ROADMAP/TODO/JOURNAL and configured generated outputs do not count.
+Any other changed file (including deletions) resets the streak, as does a dirty
+death. This is a no-progress heuristic, not proof that the roadmap is complete.
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-python main.py "list the python files here and count their lines"
+Operator knobs live in `substrate/config.py` and are persisted to runtime
+`substrate/state/config.json` for spawned runners. `completion_loop_threshold`
+defaults to 3. `completion_ignored_globs` lists paths relative to `agent/` ignored
+by the detector (including `site/*`, `_site/*`, `build/*`, `dist/*` and caches).
+Patterns are case-sensitive and `*` matches across directories. Keep them narrow:
+source files placed in an excluded output directory will not count as progress.
+`artifact_globs` defaults to all source files; narrow it to e.g. `["works/*.md"]`
+for a lineage-specific count. The injected count is a file count, not a judgement
+about completed works. The prompt encourages scripted, on-demand generation of
+presentation output instead of expensive manual rewrites.
+
+Containment uses a container, a non-root runner/body, root-owned read-only substrate
+code, a read-only root filesystem, dropped capabilities and no-new-privileges.
+An internal-only network routes outbound traffic through an allowlisting proxy
+for the configured provider API hosts. No Docker socket or VCS credentials are
+mounted. The boot-check protects rebirth; metering enforces the cost cap and halts
+on an unpriceable model. A progress-based dead-man's-switch reaps a wedged runner
+and its children after the configured timeout (default 1,800 seconds).
+
+The in-process guardrail is defense in depth, not an isolation boundary: it allows
+reads and standard output sinks, blocks writes outside `agent/`, and blocks process
+control and scheduler commands. Substrate code is readable. Runtime state,
+journals and `.git` are deliberately writable by the runner's UID; because the
+agent shares that process and UID, these are not OS-isolated from arbitrary body
+code. See [the containment model](doc/CONTAINMENT.md) for the accepted boundary.
+
+To run a lineage, install Docker with Compose, configure provider credentials
+using [.env.example](.env.example), and export `DEEPSEEK_API_KEY` (or put it in a
+root `.env`). The default model is `deepseek/deepseek-chat`; the body can choose an
+allowlisted provider/model via `agent/MODEL`. From the repository root:
+
+```sh
+docker compose -f containment/docker-compose.yml up --build
 ```
 
-Pick any litellm-supported model with `--model`:
+This launches a live, metered lineage. Its named volume is initialized from the
+image on first use; subsequent starts resume that volume. Rebuilding the image
+does not replace an existing volume's body or substrate files. Fresh builds exclude
+host state, journals, harvests, exports, caches and scratch files; only empty
+runtime state/journal directories are created by the Dockerfile.
 
-```bash
-python main.py --model gpt-4o "summarize README.md"
+Harvest a running or finished lineage from the host:
+
+```sh
+pythontools/harvest.py --volume containment_lineage --out ./runs
 ```
 
-## Run the tests
+The volume mount is read-only. Output under `runs/<id>/` includes journals, the
+body, state, Git log, per-generation diffs, `RUN_SUMMARY.md` and `INDEX.md`.
+A running harvest can span writes; harvest again after stopping for a final record.
+If you use a custom Compose project name, pass its actual volume name.
 
-No API key needed — the loop test drives a stubbed provider, so nothing hits the
-network.
+**HARVEST BEFORE `docker compose -f containment/docker-compose.yml down -v`.**
+`down -v` destroys the run's volume, including its evolved body, memory and history.
+Plain `down` preserves the volume.
 
-```bash
-pytest
+Development checks require Python 3.12+ and Git. They use disposable repositories
+and stubbed providers; they do not launch a live agent:
+
+```sh
+pip install -e ".[dev]"
+python -m pytest tests agent/tests
+ruff check .
+# PowerShell; requires a running Docker daemon:
+$env:KAIZEN_CONTAINER_TESTS = "1"
+python -m pytest tests/test_m1_containment.py
 ```
 
-## Make it your agent
-
-This repo is the starting skeleton; growing it into a real agent is the expected
-next step, and it happens at the seams — the loop and the four tools usually stay
-as they are:
-
-1. Add domain tools under `src/spine/tools/` (implement the `Tool` protocol) and
-   register them with `Agent(tools=[...])`.
-2. Edit `src/spine/prompts/system.md` for the domain and voice.
-3. Drop in skills (CLI tools + READMEs) under `skills/`.
-4. Tighten the `before_tool_call` hook if the agent needs policy (e.g. constrain
-   `bash`).
-5. Run.
-
-See [`doc/spine-spec.md`](doc/spine-spec.md) for the reasoning, and
-[`CLAUDE.md`](CLAUDE.md) for the bootstrap protocol a coding agent should follow on
-a fresh clone: read the skeleton → interview the developer → discuss → build.
-
-## More
-
-- [`doc/ARCHITECTURE.md`](doc/ARCHITECTURE.md) — code-level walkthrough with the
-  extension recipes (add a tool, a hook, a skill, swap the provider).
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — the grain to keep while you build on it.
-- [`skills/`](skills/) — what a skill is, and a runnable `lines` example.
-
----
-To turn it on — restart (this also brings in every recent fix)
-A restart is needed because the code runs from the volume (which still holds the older copy). The fresh path gets you all of it at once — full transcript + live journal, context-window fit, transient-error retry, and restart-on-halt:
-
-
-docker compose --env-file .env -f containment/docker-compose.yml down -v
-docker compose --env-file .env -f containment/docker-compose.yml up --build
-(Or, to keep the current lineage, the in-place docker run … cp … refresh from earlier, then up -d.)
-
-Reading / saving it live
-
-# follow live
-docker compose --env-file .env -f containment/docker-compose.yml logs -f kaizen
-# the per-generation journals are now complete + live on the volume:
-docker run --rm -v containment_lineage:/lineage -v "${PWD}:/out" alpine cp -r /lineage/substrate/journal /out/journal
-That's the full "watch everything it says, thinks, and does" pass. If anything in the stream is still less detailed than you want (e.g. you'd like per-call latency, or the raw request JSON), say the word and I'll add it.
+The gated container tests override the entrypoint and exercise permissions, seed
+hygiene and volume persistence without starting a lineage. See [Kaizen's design
+spec](doc/SPEC.md), [containment](doc/CONTAINMENT.md), and [spine's foundation
+spec](doc/spine-spec.md). Some design-spec passages describe earlier plans; the
+code and this README describe the implemented commit/boot-check order and local
+Git storage.

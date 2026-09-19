@@ -10,7 +10,7 @@ only what it needs, without touching the core.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -37,14 +37,14 @@ class BeforeToolCall:
 class Hooks:
     """Permissive, no-op hooks. Subclass and override to add policy."""
 
-    def session_start(self, agent: "Agent") -> None:
+    def session_start(self, agent: Agent) -> None:
         """Called once before the first turn. Register tools, load skills, etc."""
 
-    def session_end(self, agent: "Agent") -> None:
+    def session_end(self, agent: Agent) -> None:
         """Called once when a run finishes. Teardown, flush logs, etc."""
 
     def before_tool_call(
-        self, tool: Tool, args: BaseModel, agent: "Agent"
+        self, tool: Tool, args: BaseModel, agent: Agent
     ) -> BeforeToolCall:
         """Runs before a tool executes. The only place policy belongs.
 
@@ -54,7 +54,7 @@ class Hooks:
         return BeforeToolCall()
 
     def after_tool_call(
-        self, tool: Tool, args: BaseModel, result: ToolResult, agent: "Agent"
+        self, tool: Tool, args: BaseModel, result: ToolResult, agent: Agent
     ) -> ToolResult:
         """Runs after a tool executes. Inspect or annotate the result; may set
         the `terminate` hint by returning a result with `terminate=True`."""

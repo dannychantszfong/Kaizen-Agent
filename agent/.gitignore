@@ -1,0 +1,22 @@
+# Seeded with the body, including when copied into its own repository.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+*.egg-info/
+a
+*.log
+_idx.txt
+_wrk.txt
+existing_works.txt
+index_ids*.txt
+work_files*.txt
+*-export/
+journal/
+/JOURNAL.md
+/MEMORY.md
+/ROADMAP.md
+/TODO.json

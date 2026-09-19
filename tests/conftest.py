@@ -17,7 +17,7 @@ import pytest
 # Pin `spine` to the real body up front, so a temp repo's `agent/src` (inserted on
 # sys.path while a body runs) can never shadow it in-process. The boot-check runs
 # the candidate body in a *subprocess*, which is the only place a temp body loads.
-import spine  # noqa: E402,F401
+import spine  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,6 +34,17 @@ _IGNORE = shutil.ignore_patterns(
     ".venv",
     "venv",
     "*.egg-info",
+    "runs",
+    "*-export",
+    ".tmp*",
+    "*.log",
+    "a",
+    "_idx.txt",
+    "_wrk.txt",
+    "existing_works.txt",
+    "index_ids*.txt",
+    "work_files*.txt",
+    ".env",
 )
 
 
@@ -48,6 +59,7 @@ def head_sha(root: Path) -> str:
         ["git", "-C", str(root), "rev-parse", "HEAD"],
         capture_output=True,
         text=True,
+        check=False,
     ).stdout.strip()
 
 

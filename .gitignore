@@ -53,3 +53,15 @@ runs/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Local scratch and exports (at any depth).
+a
+_idx.txt
+_wrk.txt
+existing_works.txt
+index_ids*.txt
+work_files*.txt
+*-export/
+journal/
+/JOURNAL.md
+.tmp*/
